@@ -55,6 +55,18 @@ Then in subsequent weeks: Gmail + Calendar OAuth (Week 2), reminders + morning b
 - Git config: `user.name = "Cos2ubh"`, `user.email = "22050320@coer.ac.in"` (college address — commits may not visually attribute to GitHub profile unless email is added there)
 - Line endings: CRLF/LF warnings from git are normal on Windows, harmless
 
+## Session-end ritual (mandatory)
+
+At the end of every substantive session — any session that moved the project forward (added features, fixed bugs, changed direction, decided on new conventions) — do this before signing off:
+
+1. **Update the "Current state" section above** to reflect what got done this session. If a numbered "Session N complete" line applies, add it. Move items from "Next session" to "Current state" as they ship.
+2. **Rewrite "Next session"** if plans shifted or the previous plan was completed. Be specific — the next Claude reads this to know what to build.
+3. **Note new environment quirks or working conventions** in the relevant sections above (Environment / Working conventions) so the next session starts with better context.
+4. **Update relevant user-level memory files** at `C:\Users\KAUSTUBH\.claude\projects\C--Users-KAUSTUBH\memory\` if any preferences, project state, or user-level context changed.
+5. **Commit and push CLAUDE.md** — commit message pattern: `update CLAUDE.md with Session N status` or similar. This is exempt from the no-commit-in-passing rule; the whole point is to make CLAUDE.md a durable, versioned snapshot.
+
+The goal: every session opens with a CLAUDE.md that accurately describes "where we are right now" — not where we were three sessions ago. This is how the multi-session workflow stays lossless without token-heavy chat history.
+
 ## References
 
 - GitHub: https://github.com/Cos2ubh/personal-agent
