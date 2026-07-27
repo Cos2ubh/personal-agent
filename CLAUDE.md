@@ -46,6 +46,22 @@ Then in subsequent weeks: Gmail + Calendar OAuth (Week 2), reminders + morning b
 
 4. **Commit style:** clear single-purpose commits, message describes *why* not just *what*. Push at end of each session.
 
+## Also read the user-level memory folder
+
+Personal preferences, cross-project context, and durable rules that apply across all Claude work with Kaustubh live in a separate memory folder outside this project:
+
+**`C:\Users\KAUSTUBH\.claude\projects\C--Users-KAUSTUBH\memory\`**
+
+Start with `MEMORY.md` in that folder — it's an index of all memory files with one-line descriptions. Read the ones relevant to what we're working on. Especially important for `personal-agent` work:
+- `project_personal_agent_build.md` — deeper project context, 30-day plan, business vision
+- `project_portfolio_status.md` — full GitHub portfolio state and pinning strategy
+- `feedback_stepwise_teaching.md` — teaching mode during builds
+- `feedback_no_claude_coauthor_commits.md` — commit-message policy
+- `feedback_session_end_ritual.md` — the ritual documented below, at user level
+- `feedback_conversational_voice.md` — communication style
+
+If this Claude Code instance was opened with `personal-agent` as the primary working directory (rather than `C:\Users\KAUSTUBH\`), the auto-loaded memory folder may be empty or scoped to a different path. Always cross-check the user-level folder above — that's where the durable context lives.
+
 ## Environment
 
 - OS: Windows 11
