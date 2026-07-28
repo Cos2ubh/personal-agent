@@ -13,6 +13,7 @@ from pathlib import Path
 from google.genai import types
 
 from tools.filesystem import read_file, list_dir, write_file, PermissionDenied
+from tools.audit import log as audit_log
 from config import get_read_paths, get_write_paths
 
 
@@ -177,10 +178,32 @@ def execute_tool(name: str, args: dict) -> str:
     """
     Execute a tool by name with the given arguments.
     Always returns a string suitable to feed back to the LLM.
+    Every call is written to the audit log with an outcome tag.
     """
     if name not in TOOL_DISPATCH:
-        return f"Error: unknown tool '{name}'"
+        msg = f"Error: unknown tool '{name}'"
+        audit_log(name, args, "error", msg)
+        return msg
+
     try:
-        return str(TOOL_DISPATCH[name](**args))
+        result = str(TOOL_DISPATCH[name](**args))
     except Exception as e:
-        return f"Error executing {name}: {type(e).__name__}: {e}"
+        msg = f"Error executing {name}: {type(e).__name__}: {e}"
+        audit_log(name, args, "error", msg)
+        return msg
+
+    # Classify outcome by result content
+    if result.startswith("PermissionDenied:"):
+        outcome = "denied"
+    elif result.startswith("Error"):
+        outcome = "error"
+    else:
+        outcome = "ok"
+
+    audit_log(name, args, outcome, result)
+    return result
+
+
+def record_declined(name: str, args: dict):
+    """Called by the agent loop when the user rejects a destructive tool at the approval prompt."""
+    audit_log(name, args, "denied", "user declined at approval prompt")

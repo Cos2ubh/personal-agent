@@ -7,6 +7,8 @@ Special commands (type during chat):
   /forget key             — delete a fact from semantic memory
   /facts                  — list all stored facts
   /permissions            — re-run the file system access wizard
+  /access                 — show current read + write scopes
+  /audit [N]              — show last N file system operations (default 10)
   /help                   — show this command list
   /quit  or  quit         — exit
 """
@@ -15,7 +17,8 @@ from config import fs_permissions_configured, setup_fs_permissions, get_read_pat
 from llm import call_llm
 from memory.semantic import SemanticMemory
 from memory.episodic import EpisodicMemory
-from tools.registry import ALL_TOOLS, execute_tool, DESTRUCTIVE_TOOLS, preview_action
+from tools.registry import ALL_TOOLS, execute_tool, DESTRUCTIVE_TOOLS, preview_action, record_declined
+from tools.audit import format_tail as audit_tail
 
 MAX_TOOL_ITERATIONS = 6  # hard cap on tool-call chains per user turn
 
@@ -95,6 +98,26 @@ def handle_command(raw: str, semantic: SemanticMemory) -> bool:
         setup_fs_permissions()
         return True
 
+    if cmd == "/access":
+        read_scope = get_read_paths()
+        write_scope = get_write_paths()
+        print("  Read scope:")
+        for p in read_scope or ["    (none)"]:
+            print(f"    - {p}")
+        print("  Write scope:")
+        for p in write_scope or ["    (none — read-only)"]:
+            print(f"    - {p}")
+        return True
+
+    if cmd == "/audit" or cmd.startswith("/audit "):
+        n = 10
+        rest = cmd[len("/audit"):].strip()
+        if rest.isdigit():
+            n = int(rest)
+        print(f"  Last {n} FS operations:")
+        print(audit_tail(n))
+        return True
+
     if cmd == "/help":
         print(__doc__)
         return True
@@ -138,6 +161,7 @@ def run_agentic_turn(user_input: str, history: list[dict], system: str) -> str:
                     if answer != "y":
                         result = f"User declined the {tc.name} operation. Do not retry unless the user changes their mind."
                         print(f"  [declined by user]")
+                        record_declined(tc.name, tc.args)
                         history.append({"role": "tool", "name": tc.name, "content": result})
                         continue
 
