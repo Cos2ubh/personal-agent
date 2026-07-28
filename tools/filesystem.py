@@ -2,14 +2,68 @@
 Sandboxed file system access.
 Every operation checks the path against the user's allow-list before proceeding.
 The agent cannot read, list, or even acknowledge the existence of anything outside.
+
+Additionally, a hardcoded blacklist blocks sensitive files (secrets, keys,
+credentials, browser cookies, git internals) EVEN INSIDE allowed folders.
+The blacklist is not user-configurable — these files should never be accessed
+by an agent regardless of allow-list scope.
 """
 
+import fnmatch
 from pathlib import Path
 from config import get_allowed_paths
 
 
+# Filename patterns (case-insensitive) that match sensitive files.
+# Match is against the individual name components of the path, not the full path.
+SENSITIVE_NAME_PATTERNS = [
+    ".env", ".env.*",              # env vars / secrets
+    "id_rsa", "id_rsa.*",          # SSH private keys
+    "id_dsa", "id_ecdsa", "id_ed25519", "id_ed25519.*",
+    "*.pem", "*.key", "*.pfx", "*.p12",   # private keys / certs
+    "credentials", "credentials.*",       # AWS-style creds
+    "*.kdbx",                             # KeePass DBs
+    "cookies.sqlite", "cookies.sqlite-*",  # browser cookies
+    "Wallet.dat", "wallet.dat",           # crypto wallets
+    "NTUSER.DAT", "ntuser.dat",           # windows user hive
+    ".git-credentials",
+    "authorized_keys", "known_hosts",
+    "*.password", "*.secret",
+]
+
+# Directory names (case-insensitive) whose contents are entirely off-limits.
+SENSITIVE_DIR_NAMES = [
+    ".git",         # git internals (config can hold tokens)
+    ".ssh",         # ssh keys and configs
+    ".aws",         # aws creds
+    ".gnupg",       # GPG keys
+    "AppData",      # Windows per-app data (contains cookies, tokens, session state)
+]
+
+
 class PermissionDenied(Exception):
     pass
+
+
+def _matches_sensitive(path: Path) -> str | None:
+    """
+    If the path is (or is inside) a sensitive file/dir, return a short reason string.
+    Otherwise return None.
+    """
+    # Check each path part against sensitive directory names
+    for part in path.parts:
+        lower = part.lower()
+        for dname in SENSITIVE_DIR_NAMES:
+            if lower == dname.lower():
+                return f"inside sensitive directory '{dname}'"
+
+    # Check the final name against sensitive file patterns
+    name_lower = path.name.lower()
+    for pattern in SENSITIVE_NAME_PATTERNS:
+        if fnmatch.fnmatch(name_lower, pattern.lower()):
+            return f"matches sensitive pattern '{pattern}'"
+
+    return None
 
 
 def _is_allowed(path: Path) -> bool:
@@ -22,10 +76,24 @@ def _is_allowed(path: Path) -> bool:
 
 
 def _guard(path: Path):
+    """
+    Raise PermissionDenied if the path is:
+      1) outside the user's allow-list, OR
+      2) matches a hardcoded sensitive pattern (even inside allow-list).
+    """
+    resolved = path.resolve()
+
     if not _is_allowed(path):
         raise PermissionDenied(
             f"Access denied: '{path}' is outside your allowed folders. "
             "Use /permissions to update your allow-list."
+        )
+
+    sensitive_reason = _matches_sensitive(resolved)
+    if sensitive_reason:
+        raise PermissionDenied(
+            f"Access denied: '{path}' is blocked ({sensitive_reason}). "
+            "Sensitive files are hardcoded off-limits regardless of allow-list."
         )
 
 
