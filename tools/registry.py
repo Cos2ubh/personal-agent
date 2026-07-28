@@ -8,6 +8,8 @@ Each tool has:
 To add a new tool: write the function, add a FunctionDeclaration, register it.
 """
 
+from pathlib import Path
+
 from google.genai import types
 
 from tools.filesystem import read_file, list_dir, write_file, PermissionDenied
@@ -100,6 +102,41 @@ FS_TOOL = types.Tool(function_declarations=[
 ])
 
 ALL_TOOLS = [FS_TOOL]
+
+
+# Tools that mutate the file system — the agent loop must confirm with the
+# user before executing these. Keep this set narrow; adding a name here is a
+# statement that the operation is destructive and non-recoverable.
+DESTRUCTIVE_TOOLS = {"write_file"}
+
+
+def preview_action(name: str, args: dict) -> str:
+    """
+    Return a short, human-readable preview of what a destructive tool would do.
+    Used by the agent loop to render an approval prompt.
+    """
+    if name == "write_file":
+        path_str = args.get("path", "?")
+        content = args.get("content", "")
+        try:
+            existing = Path(path_str).stat().st_size
+            existing_note = f"OVERWRITE existing file ({existing:,} bytes)"
+        except (FileNotFoundError, OSError):
+            existing_note = "create new file"
+
+        preview_len = 300
+        content_preview = content[:preview_len]
+        if len(content) > preview_len:
+            content_preview += f"\n... [+{len(content) - preview_len} more chars]"
+
+        return (
+            f"  path:    {path_str}\n"
+            f"  action:  {existing_note}\n"
+            f"  size:    {len(content):,} chars\n"
+            f"  preview: |\n"
+            f"    {content_preview.replace(chr(10), chr(10) + '    ')}"
+        )
+    return f"  (no preview available for '{name}')"
 
 
 # ── Dispatcher: name → executor ──────────────────────────────────────────

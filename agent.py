@@ -15,7 +15,7 @@ from config import fs_permissions_configured, setup_fs_permissions, get_read_pat
 from llm import call_llm
 from memory.semantic import SemanticMemory
 from memory.episodic import EpisodicMemory
-from tools.registry import ALL_TOOLS, execute_tool
+from tools.registry import ALL_TOOLS, execute_tool, DESTRUCTIVE_TOOLS, preview_action
 
 MAX_TOOL_ITERATIONS = 6  # hard cap on tool-call chains per user turn
 
@@ -125,9 +125,24 @@ def run_agentic_turn(user_input: str, history: list[dict], system: str) -> str:
                     "name": tc.name,
                     "args": tc.args,
                 })
+
+                # Destructive tools need explicit user approval before running
+                if tc.name in DESTRUCTIVE_TOOLS:
+                    print("  ─── Approval needed ─────────────────────────────")
+                    print(preview_action(tc.name, tc.args))
+                    print("  ─────────────────────────────────────────────────")
+                    try:
+                        answer = input("  Approve? [y/N]: ").strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        answer = ""
+                    if answer != "y":
+                        result = f"User declined the {tc.name} operation. Do not retry unless the user changes their mind."
+                        print(f"  [declined by user]")
+                        history.append({"role": "tool", "name": tc.name, "content": result})
+                        continue
+
                 # Execute and record the result
                 result = execute_tool(tc.name, tc.args)
-                # Truncate long results in the console preview only (LLM still sees full)
                 preview = result[:200] + ("..." if len(result) > 200 else "")
                 print(f"  [result: {preview}]")
                 history.append({
