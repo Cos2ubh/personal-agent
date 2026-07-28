@@ -11,7 +11,7 @@ by an agent regardless of allow-list scope.
 
 import fnmatch
 from pathlib import Path
-from config import get_allowed_paths
+from config import get_read_paths, get_write_paths
 
 
 # Filename patterns (case-insensitive) that match sensitive files.
@@ -66,27 +66,37 @@ def _matches_sensitive(path: Path) -> str | None:
     return None
 
 
-def _is_allowed(path: Path) -> bool:
-    """True if path is inside at least one allowed root."""
+def _is_inside(path: Path, roots: list[str]) -> bool:
+    """True if path is inside at least one of the given root paths."""
     resolved = path.resolve()
-    for root in get_allowed_paths():
+    for root in roots:
         if resolved.is_relative_to(Path(root).resolve()):
             return True
     return False
 
 
-def _guard(path: Path):
+def _guard(path: Path, mode: str = "read"):
     """
     Raise PermissionDenied if the path is:
-      1) outside the user's allow-list, OR
+      1) outside the user's allow-list for the given mode (read or write), OR
       2) matches a hardcoded sensitive pattern (even inside allow-list).
+
+    mode: 'read' checks read_paths; 'write' checks write_paths.
     """
     resolved = path.resolve()
 
-    if not _is_allowed(path):
+    if mode == "write":
+        scope = get_write_paths()
+        scope_name = "write"
+        hint = "Use /permissions to grant write access to this folder."
+    else:
+        scope = get_read_paths()
+        scope_name = "read"
+        hint = "Use /permissions to grant read access to this folder."
+
+    if not _is_inside(path, scope):
         raise PermissionDenied(
-            f"Access denied: '{path}' is outside your allowed folders. "
-            "Use /permissions to update your allow-list."
+            f"Access denied ({scope_name}): '{path}' is outside the {scope_name} scope. {hint}"
         )
 
     sensitive_reason = _matches_sensitive(resolved)
@@ -101,9 +111,9 @@ MAX_READ_BYTES = 10 * 1024 * 1024  # 10 MB — big enough for any sane text file
 
 
 def read_file(path_str: str) -> str:
-    """Read a text file. Raises PermissionDenied if outside allowed paths."""
+    """Read a text file. Raises PermissionDenied if outside read scope."""
     path = Path(path_str)
-    _guard(path)
+    _guard(path, mode="read")
     if not path.exists():
         return f"Error: file not found — {path}"
     if not path.is_file():
@@ -122,9 +132,9 @@ def read_file(path_str: str) -> str:
 
 
 def list_dir(path_str: str) -> list[str]:
-    """List contents of a directory. Raises PermissionDenied if outside allowed paths."""
+    """List contents of a directory. Raises PermissionDenied if outside read scope."""
     path = Path(path_str)
-    _guard(path)
+    _guard(path, mode="read")
     if not path.exists():
         return [f"Error: directory not found — {path}"]
     if not path.is_dir():
@@ -137,9 +147,9 @@ def list_dir(path_str: str) -> list[str]:
 
 
 def write_file(path_str: str, content: str) -> str:
-    """Write text to a file. Raises PermissionDenied if outside allowed paths."""
+    """Write text to a file. Raises PermissionDenied if outside write scope."""
     path = Path(path_str)
-    _guard(path)
+    _guard(path, mode="write")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")

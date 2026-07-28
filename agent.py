@@ -11,7 +11,7 @@ Special commands (type during chat):
   /quit  or  quit         — exit
 """
 
-from config import fs_permissions_configured, setup_fs_permissions, get_allowed_paths
+from config import fs_permissions_configured, setup_fs_permissions, get_read_paths, get_write_paths
 from llm import call_llm
 from memory.semantic import SemanticMemory
 from memory.episodic import EpisodicMemory
@@ -34,11 +34,20 @@ Never make up information. If you don't know something, say so."""
 def build_system_prompt(user_msg: str, semantic: SemanticMemory, episodic: EpisodicMemory) -> str:
     parts = [SYSTEM_BASE]
 
-    allowed = get_allowed_paths()
-    if allowed:
-        parts.append("## Current file system allow-list\n" + "\n".join(f"- {p}" for p in allowed))
+    read_scope = get_read_paths()
+    write_scope = get_write_paths()
+    scope_lines = ["## Current file system permissions"]
+    scope_lines.append("Read scope:")
+    if read_scope:
+        scope_lines.extend(f"- {p}" for p in read_scope)
     else:
-        parts.append("## Current file system allow-list\n(none — no file access configured)")
+        scope_lines.append("- (none — no read access)")
+    scope_lines.append("Write scope:")
+    if write_scope:
+        scope_lines.extend(f"- {p}" for p in write_scope)
+    else:
+        scope_lines.append("- (none — read-only)")
+    parts.append("\n".join(scope_lines))
 
     facts_block = semantic.as_prompt_block()
     if facts_block:

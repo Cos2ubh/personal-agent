@@ -11,7 +11,7 @@ To add a new tool: write the function, add a FunctionDeclaration, register it.
 from google.genai import types
 
 from tools.filesystem import read_file, list_dir, write_file, PermissionDenied
-from config import get_allowed_paths
+from config import get_read_paths, get_write_paths
 
 
 # ── Function declarations (what Gemini sees) ─────────────────────────────
@@ -81,9 +81,11 @@ _write_file_decl = types.FunctionDeclaration(
 _list_allowed_paths_decl = types.FunctionDeclaration(
     name="list_allowed_paths",
     description=(
-        "Return the list of drives and folders the user has granted the agent access to. "
-        "Use this when the user asks what the agent can see, or before attempting to read "
-        "files if you're unsure whether a path is allowed."
+        "Return the two permission scopes the user has configured: read_paths "
+        "(folders the agent can read from and list) and write_paths (folders "
+        "the agent can write to or delete inside). Write scope is usually a "
+        "subset of read scope. Use this when the user asks what the agent can "
+        "see or when unsure whether a path is allowed."
     ),
     parameters=types.Schema(type="OBJECT", properties={}),
 )
@@ -115,10 +117,15 @@ def _wrap(fn):
 
 
 def _list_allowed_paths_impl():
-    paths = get_allowed_paths()
-    if not paths:
+    read = get_read_paths()
+    write = get_write_paths()
+    if not read and not write:
         return "No paths configured — the agent has no file system access."
-    return "\n".join(paths)
+    lines = ["Read scope:"]
+    lines.extend(f"  - {p}" for p in (read or ["(none)"]))
+    lines.append("Write scope:")
+    lines.extend(f"  - {p}" for p in (write or ["(none — read-only)"]))
+    return "\n".join(lines)
 
 
 TOOL_DISPATCH = {
