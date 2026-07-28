@@ -146,6 +146,87 @@ def list_dir(path_str: str) -> list[str]:
         return [f"Error: OS-level permission denied for '{path}'."]
 
 
+MAX_FIND_RESULTS = 200  # cap per query — a broad glob across C:\ can return millions
+
+
+def find_files(pattern: str, extension: str = "", path_hint: str = "") -> list[str]:
+    """
+    Search for files by filename pattern across all read-scoped folders.
+
+    pattern:    substring or glob to match against filenames (case-insensitive).
+                Examples: 'marksheet', '*resume*', 'IMG_202?'.
+    extension:  optional filter like '.pdf', '.jpg' — matched case-insensitive.
+                Leading dot optional.
+    path_hint:  optional folder path to restrict the search to.
+                Must be inside read scope. If empty, searches all read-scoped roots.
+
+    Returns a list of matching absolute file paths (capped at MAX_FIND_RESULTS).
+    Sensitive files (blacklisted) are never included even if they match.
+    """
+    from config import get_read_paths
+
+    # Normalise extension filter
+    ext = extension.strip().lower()
+    if ext and not ext.startswith("."):
+        ext = "." + ext
+
+    # Normalise pattern into a case-insensitive fnmatch glob
+    pat = pattern.strip()
+    if not pat:
+        return ["Error: pattern is empty. Provide a substring or glob like 'marksheet' or '*.pdf'."]
+    if "*" not in pat and "?" not in pat and "[" not in pat:
+        # No wildcards — treat as substring match by wrapping with *
+        pat = f"*{pat}*"
+    pat_lower = pat.lower()
+
+    # Determine which roots to search
+    read_roots = get_read_paths()
+    if not read_roots:
+        return ["Error: no read scope configured. Use /permissions to grant read access."]
+
+    if path_hint:
+        hint_path = Path(path_hint).resolve()
+        if not _is_inside(hint_path, read_roots):
+            return [f"Error: path_hint '{path_hint}' is outside the read scope."]
+        roots = [str(hint_path)]
+    else:
+        roots = read_roots
+
+    results = []
+    truncated = False
+
+    for root in roots:
+        root_path = Path(root)
+        try:
+            for entry in root_path.rglob("*"):
+                if not entry.is_file():
+                    continue
+                name_lower = entry.name.lower()
+                if not fnmatch.fnmatch(name_lower, pat_lower):
+                    continue
+                if ext and not name_lower.endswith(ext):
+                    continue
+                if _matches_sensitive(entry.resolve()):
+                    continue
+                results.append(str(entry))
+                if len(results) >= MAX_FIND_RESULTS:
+                    truncated = True
+                    break
+        except (PermissionError, OSError):
+            # Skip roots we can't walk (e.g. OS-restricted dirs); don't leak the error
+            continue
+        if truncated:
+            break
+
+    if not results:
+        return [f"No files matched pattern '{pattern}'" + (f" with extension '{extension}'" if extension else "")]
+
+    if truncated:
+        results.append(f"... ({MAX_FIND_RESULTS} results reached — narrow the query with path_hint or a more specific pattern)")
+
+    return results
+
+
 def write_file(path_str: str, content: str) -> str:
     """Write text to a file. Raises PermissionDenied if outside write scope."""
     path = Path(path_str)

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from google.genai import types
 
-from tools.filesystem import read_file, list_dir, write_file, PermissionDenied
+from tools.filesystem import read_file, list_dir, write_file, find_files, PermissionDenied
 from tools.audit import log as audit_log
 from config import get_read_paths, get_write_paths
 
@@ -81,6 +81,44 @@ _write_file_decl = types.FunctionDeclaration(
     ),
 )
 
+_find_files_decl = types.FunctionDeclaration(
+    name="find_files",
+    description=(
+        "Search for files by filename across all read-scoped folders. Use this "
+        "when the user asks to locate files by name or partial name (e.g. 'find "
+        "my marksheet', 'show me PDFs from 2023', 'find images with kaustubh in "
+        "the name'). Supports wildcards (* and ?). Case-insensitive. Can filter "
+        "by extension. Sensitive files are never returned. Results capped at 200 "
+        "— if truncated, narrow the query with path_hint or a stricter pattern."
+    ),
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "pattern": types.Schema(
+                type="STRING",
+                description=(
+                    "Filename pattern to match. Plain text is treated as a substring "
+                    "(e.g. 'marksheet' matches 'my_marksheet_2020.pdf'). Wildcards "
+                    "supported: * matches any chars, ? matches one char."
+                ),
+            ),
+            "extension": types.Schema(
+                type="STRING",
+                description="Optional extension filter like 'pdf' or '.jpg'. Leave empty for any type.",
+            ),
+            "path_hint": types.Schema(
+                type="STRING",
+                description=(
+                    "Optional folder path to restrict the search to. Must be inside "
+                    "read scope. Leave empty to search all read-scoped roots."
+                ),
+            ),
+        },
+        required=["pattern"],
+    ),
+)
+
+
 _list_allowed_paths_decl = types.FunctionDeclaration(
     name="list_allowed_paths",
     description=(
@@ -99,6 +137,7 @@ FS_TOOL = types.Tool(function_declarations=[
     _read_file_decl,
     _list_dir_decl,
     _write_file_decl,
+    _find_files_decl,
     _list_allowed_paths_decl,
 ])
 
@@ -170,6 +209,7 @@ TOOL_DISPATCH = {
     "read_file":         _wrap(lambda path: read_file(path)),
     "list_dir":          _wrap(lambda path: "\n".join(list_dir(path))),
     "write_file":        _wrap(lambda path, content: write_file(path, content)),
+    "find_files":        _wrap(lambda pattern, extension="", path_hint="": "\n".join(find_files(pattern, extension, path_hint))),
     "list_allowed_paths": _wrap(lambda: _list_allowed_paths_impl()),
 }
 
