@@ -46,7 +46,7 @@ Then in subsequent weeks: Gmail + Calendar OAuth (Week 2), reminders + morning b
 
 4. **Commit style — human voice.** Subject lines in lowercase imperative, ~50 chars, no trailing period ("add X", "fix Y", "wire Z"). Body only when the "why" isn't obvious — first person or implicit first person, terse, contractions fine. Never write "the user" or refer to Kaustubh by name in a commit message. Skip career/portfolio/recruiter justifications; real dev commits don't cite outside audiences.
 
-5. **Commit + push every change immediately.** After every substantive add / update / enhancement, commit and push to origin without waiting to be asked. GitHub state should mirror local state within minutes. Don't commit half-finished code or code that fails imports. Session-end CLAUDE.md ritual (below) still applies separately.
+5. **Commit + push every change immediately — timing matters as much as granularity.** After every substantive add / update / enhancement, run `git commit && git push` at the moment the chunk reaches a working state, not queued up for session end. If multiple commits land within the same minute on GitHub they cluster and read as scripted; commits should spread naturally across the working session. Don't commit half-finished code or code that fails imports. Session-end CLAUDE.md ritual (below) still applies separately.
 
 ## Also read the user-level memory folder
 
