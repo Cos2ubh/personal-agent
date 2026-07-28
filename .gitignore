@@ -7,3 +7,7 @@ __pycache__/
 data/
 .vscode/
 .idea/
+
+# Local working notes for AI-assistant sessions. Portfolio repos should stay
+# recruiter-facing — this file is my private state, not project docs.
+CLAUDE.md
