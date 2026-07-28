@@ -44,7 +44,9 @@ Then in subsequent weeks: Gmail + Calendar OAuth (Week 2), reminders + morning b
 
 3. **Verify empirically, don't assume.** If uncertain about something (like the API key format was — turned out to be a newer Google format), say so and test. Don't confidently assert.
 
-4. **Commit style:** clear single-purpose commits, message describes *why* not just *what*. Push at end of each session.
+4. **Commit style:** clear single-purpose commits, message describes *why* not just *what*.
+
+5. **Commit + push every change immediately.** After every substantive add / update / enhancement, commit and push to origin without waiting for the user to ask. GitHub state should mirror local state within minutes. Motivation: portfolio integrity for FO applications — recruiters may look at commit history, live repo should show real progression, not one giant end-of-session dump. Don't commit half-finished code or code that fails imports. Session-end CLAUDE.md ritual (below) still applies separately.
 
 ## Also read the user-level memory folder
 
