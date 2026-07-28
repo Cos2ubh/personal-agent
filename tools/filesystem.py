@@ -97,6 +97,9 @@ def _guard(path: Path):
         )
 
 
+MAX_READ_BYTES = 10 * 1024 * 1024  # 10 MB — big enough for any sane text file, small enough that a rogue read can't blow the LLM context
+
+
 def read_file(path_str: str) -> str:
     """Read a text file. Raises PermissionDenied if outside allowed paths."""
     path = Path(path_str)
@@ -106,6 +109,13 @@ def read_file(path_str: str) -> str:
     if not path.is_file():
         return f"Error: '{path}' is a directory, not a file."
     try:
+        size = path.stat().st_size
+        if size > MAX_READ_BYTES:
+            return (
+                f"Error: file too large — {size:,} bytes "
+                f"(limit is {MAX_READ_BYTES:,} bytes / 10 MB). "
+                f"Ask me to summarize with a targeted search or grep instead."
+            )
         return path.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         return f"Error reading file: {e}"
