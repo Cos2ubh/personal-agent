@@ -44,9 +44,9 @@ Then in subsequent weeks: Gmail + Calendar OAuth (Week 2), reminders + morning b
 
 3. **Verify empirically, don't assume.** If uncertain about something (like the API key format was — turned out to be a newer Google format), say so and test. Don't confidently assert.
 
-4. **Commit style:** clear single-purpose commits, message describes *why* not just *what*.
+4. **Commit style — human voice.** Subject lines in lowercase imperative, ~50 chars, no trailing period ("add X", "fix Y", "wire Z"). Body only when the "why" isn't obvious — first person or implicit first person, terse, contractions fine. Never write "the user" or refer to Kaustubh by name in a commit message. Skip career/portfolio/recruiter justifications; real dev commits don't cite outside audiences.
 
-5. **Commit + push every change immediately.** After every substantive add / update / enhancement, commit and push to origin without waiting for the user to ask. GitHub state should mirror local state within minutes. Motivation: portfolio integrity for FO applications — recruiters may look at commit history, live repo should show real progression, not one giant end-of-session dump. Don't commit half-finished code or code that fails imports. Session-end CLAUDE.md ritual (below) still applies separately.
+5. **Commit + push every change immediately.** After every substantive add / update / enhancement, commit and push to origin without waiting to be asked. GitHub state should mirror local state within minutes. Don't commit half-finished code or code that fails imports. Session-end CLAUDE.md ritual (below) still applies separately.
 
 ## Also read the user-level memory folder
 
