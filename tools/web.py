@@ -9,6 +9,8 @@ Callers should wrap returned content with the <external_content> marker before
 handing it to the LLM — see sub-chunk 2 for the prompt-injection defense.
 """
 
+import os
+
 import httpx
 import trafilatura
 
@@ -90,3 +92,83 @@ def fetch(url: str, max_chars: int = MAX_RETURN_CHARS) -> str:
         f"{extracted}\n"
         f"</external_content>"
     )
+
+
+# ── Web search via Tavily ─────────────────────────────────────────────────
+
+TAVILY_ENDPOINT = "https://api.tavily.com/search"
+DEFAULT_SEARCH_RESULTS = 5
+MAX_SEARCH_RESULTS = 10
+
+
+def search(query: str, max_results: int = DEFAULT_SEARCH_RESULTS) -> str:
+    """
+    Search the web via Tavily and return a formatted result list.
+
+    Returns one of:
+      - Formatted results with title, URL, and content snippet per hit
+      - "Error: <reason>" string on failure
+
+    Each result comes wrapped so the model treats snippets as untrusted data.
+    """
+    if not query or not isinstance(query, str):
+        return "Error: query is empty."
+
+    api_key = os.getenv("TAVILY_API_KEY", "").strip()
+    if not api_key:
+        return (
+            "Error: TAVILY_API_KEY is not set in .env. "
+            "Get a free key at https://tavily.com (1000 queries/mo, no card required) "
+            "and add it to .env as TAVILY_API_KEY=<your-key>."
+        )
+
+    max_results = max(1, min(max_results, MAX_SEARCH_RESULTS))
+
+    try:
+        with httpx.Client(timeout=DEFAULT_TIMEOUT_SECS) as client:
+            resp = client.post(
+                TAVILY_ENDPOINT,
+                json={
+                    "api_key": api_key,
+                    "query": query,
+                    "max_results": max_results,
+                    "search_depth": "basic",
+                },
+            )
+    except httpx.TimeoutException:
+        return f"Error: search timed out after {DEFAULT_TIMEOUT_SECS}s"
+    except httpx.HTTPError as e:
+        return f"Error: search request failed — {type(e).__name__}: {e}"
+
+    if resp.status_code == 401:
+        return "Error: TAVILY_API_KEY is invalid. Check the key at https://tavily.com."
+    if resp.status_code == 429:
+        return "Error: Tavily rate limit hit — try again in a minute or upgrade the plan."
+    if resp.status_code >= 400:
+        return f"Error: Tavily returned {resp.status_code} — {resp.text[:200]}"
+
+    try:
+        data = resp.json()
+    except ValueError:
+        return "Error: Tavily returned non-JSON response."
+
+    results = data.get("results", [])
+    if not results:
+        return f"No results for query: '{query}'"
+
+    # Build a compact, LLM-friendly result list. Each snippet wrapped as
+    # external content so the model treats it as untrusted data.
+    lines = [f"Search results for: {query}\n"]
+    for i, r in enumerate(results, 1):
+        title = r.get("title", "(no title)")
+        url = r.get("url", "")
+        content = (r.get("content") or "").strip()
+        lines.append(f"[{i}] {title}")
+        lines.append(f"    {url}")
+        if content:
+            lines.append(f'    <external_content source="{url}">')
+            lines.append(f"    {content}")
+            lines.append(f"    </external_content>")
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
