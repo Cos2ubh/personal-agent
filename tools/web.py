@@ -82,5 +82,11 @@ def fetch(url: str, max_chars: int = MAX_RETURN_CHARS) -> str:
     if len(extracted) > max_chars:
         extracted = extracted[:max_chars] + f"\n\n... [truncated at {max_chars:,} chars]"
 
-    # Prepend the source URL so the model sees provenance
-    return f"[fetched from {resp.url}]\n\n{extracted}"
+    # Wrap in explicit external-content markers so the LLM treats it as data,
+    # not instructions. See the system prompt clause in agent.py for the
+    # matching guardrail.
+    return (
+        f"<external_content source=\"{resp.url}\">\n"
+        f"{extracted}\n"
+        f"</external_content>"
+    )
