@@ -96,3 +96,186 @@ def is_authenticated() -> bool:
         return bool(creds and (creds.valid or (creds.expired and creds.refresh_token)))
     except GmailAuthError:
         return False
+
+
+# ── Read tools ────────────────────────────────────────────────────────────
+
+import base64
+from email import message_from_bytes
+from email.policy import default as email_default_policy
+
+MAX_EMAIL_BODY_CHARS = 20_000   # per-email cap in returned text
+MAX_LIST_RESULTS = 50
+
+
+def _header(headers: list[dict], name: str) -> str:
+    """Case-insensitive header lookup from Gmail's headers list."""
+    name_lower = name.lower()
+    for h in headers:
+        if h.get("name", "").lower() == name_lower:
+            return h.get("value", "")
+    return ""
+
+
+def _decode_body(msg_part: dict) -> str:
+    """Recursively find and decode the plain-text body of a Gmail message part."""
+    mime = msg_part.get("mimeType", "")
+    body = msg_part.get("body", {})
+
+    # Direct plain-text body
+    if mime == "text/plain" and body.get("data"):
+        raw = base64.urlsafe_b64decode(body["data"] + "===")
+        return raw.decode("utf-8", errors="replace")
+
+    # Multipart — recurse into parts
+    for part in msg_part.get("parts", []) or []:
+        text = _decode_body(part)
+        if text:
+            return text
+
+    # Fallback: HTML body if no plain-text found
+    if mime == "text/html" and body.get("data"):
+        raw = base64.urlsafe_b64decode(body["data"] + "===")
+        # Strip tags crudely — for LLM consumption we want plain text
+        import re
+        text = re.sub(r"<[^>]+>", " ", raw.decode("utf-8", errors="replace"))
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
+    return ""
+
+
+def list_recent(n: int = 10) -> str:
+    """Return a formatted list of the N most recent inbox messages."""
+    n = max(1, min(n, MAX_LIST_RESULTS))
+    try:
+        svc = get_service()
+    except GmailAuthError as e:
+        return f"Error: {e}"
+
+    try:
+        resp = svc.users().messages().list(userId="me", maxResults=n, labelIds=["INBOX"]).execute()
+    except HttpError as e:
+        return f"Error: Gmail list request failed — {e}"
+
+    messages = resp.get("messages", [])
+    if not messages:
+        return "Inbox is empty (or no messages match the filter)."
+
+    lines = [f"Most recent {len(messages)} inbox messages:\n"]
+    for i, m in enumerate(messages, 1):
+        try:
+            full = svc.users().messages().get(
+                userId="me", id=m["id"], format="metadata",
+                metadataHeaders=["From", "Subject", "Date"],
+            ).execute()
+        except HttpError as e:
+            lines.append(f"[{i}] (failed to fetch metadata: {e})")
+            continue
+
+        headers = full.get("payload", {}).get("headers", [])
+        frm = _header(headers, "From")
+        subj = _header(headers, "Subject") or "(no subject)"
+        date = _header(headers, "Date")
+        snippet = full.get("snippet", "").strip()
+        is_unread = "UNREAD" in full.get("labelIds", [])
+        marker = "●" if is_unread else " "
+
+        lines.append(f"[{i}] {marker} id={m['id']}")
+        lines.append(f"    From:    {frm}")
+        lines.append(f"    Subject: {subj}")
+        lines.append(f"    Date:    {date}")
+        if snippet:
+            lines.append(f"    Snippet: {snippet[:200]}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
+
+
+def read_email(email_id: str) -> str:
+    """Return the full body + headers of one email, wrapped as external content."""
+    if not email_id:
+        return "Error: email_id is empty."
+
+    try:
+        svc = get_service()
+    except GmailAuthError as e:
+        return f"Error: {e}"
+
+    try:
+        msg = svc.users().messages().get(userId="me", id=email_id, format="full").execute()
+    except HttpError as e:
+        return f"Error: Gmail get request failed — {e}"
+
+    payload = msg.get("payload", {})
+    headers = payload.get("headers", [])
+    frm = _header(headers, "From")
+    to = _header(headers, "To")
+    subj = _header(headers, "Subject") or "(no subject)"
+    date = _header(headers, "Date")
+    body = _decode_body(payload) or "(no readable body)"
+
+    if len(body) > MAX_EMAIL_BODY_CHARS:
+        body = body[:MAX_EMAIL_BODY_CHARS] + f"\n\n... [truncated at {MAX_EMAIL_BODY_CHARS:,} chars]"
+
+    return (
+        f'<external_content source="gmail:{email_id}">\n'
+        f"From:    {frm}\n"
+        f"To:      {to}\n"
+        f"Subject: {subj}\n"
+        f"Date:    {date}\n"
+        f"\n"
+        f"{body}\n"
+        f"</external_content>"
+    )
+
+
+def search(query: str, n: int = 10) -> str:
+    """
+    Search Gmail using Gmail's native query language.
+    Examples: 'from:mom', 'is:unread subject:invoice', 'has:attachment after:2026/01/01'.
+    """
+    if not query:
+        return "Error: query is empty."
+    n = max(1, min(n, MAX_LIST_RESULTS))
+
+    try:
+        svc = get_service()
+    except GmailAuthError as e:
+        return f"Error: {e}"
+
+    try:
+        resp = svc.users().messages().list(userId="me", q=query, maxResults=n).execute()
+    except HttpError as e:
+        return f"Error: Gmail search failed — {e}"
+
+    messages = resp.get("messages", [])
+    if not messages:
+        return f"No emails match query: '{query}'"
+
+    lines = [f"Search results for '{query}' — {len(messages)} match(es):\n"]
+    for i, m in enumerate(messages, 1):
+        try:
+            full = svc.users().messages().get(
+                userId="me", id=m["id"], format="metadata",
+                metadataHeaders=["From", "Subject", "Date"],
+            ).execute()
+        except HttpError as e:
+            lines.append(f"[{i}] (failed to fetch metadata: {e})")
+            continue
+
+        headers = full.get("payload", {}).get("headers", [])
+        frm = _header(headers, "From")
+        subj = _header(headers, "Subject") or "(no subject)"
+        date = _header(headers, "Date")
+        snippet = full.get("snippet", "").strip()
+
+        lines.append(f"[{i}] id={m['id']}")
+        lines.append(f"    From:    {frm}")
+        lines.append(f"    Subject: {subj}")
+        lines.append(f"    Date:    {date}")
+        if snippet:
+            lines.append(f"    Snippet: {snippet[:200]}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
