@@ -14,7 +14,13 @@ from google.genai import types
 
 from tools.filesystem import read_file, list_dir, write_file, find_files, PermissionDenied
 from tools.web import fetch as web_fetch, search as web_search
-from tools.gmail import list_recent as gmail_list_recent, read_email as gmail_read_email, search as gmail_search
+from tools.gmail import (
+    list_recent as gmail_list_recent,
+    read_email as gmail_read_email,
+    search as gmail_search,
+    draft_new as gmail_draft_new,
+    draft_reply as gmail_draft_reply,
+)
 from tools.audit import log as audit_log
 from config import get_read_paths, get_write_paths
 
@@ -164,6 +170,49 @@ _gmail_read_decl = types.FunctionDeclaration(
 )
 
 
+_gmail_draft_new_decl = types.FunctionDeclaration(
+    name="gmail_draft_new",
+    description=(
+        "Create a NEW Gmail draft (not a reply). The draft is saved to the "
+        "Drafts folder — it is NOT sent. The user can review and send from "
+        "Gmail manually. Use when the user asks you to compose a fresh email. "
+        "This tool is destructive-observable — the user will be asked to "
+        "confirm the recipient, subject, and body before the draft is saved."
+    ),
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "to": types.Schema(type="STRING", description="Recipient email address (or comma-separated for multiple)"),
+            "subject": types.Schema(type="STRING", description="Email subject line"),
+            "body": types.Schema(type="STRING", description="Plain-text body of the email"),
+            "cc": types.Schema(type="STRING", description="Optional CC recipients, comma-separated"),
+        },
+        required=["to", "subject", "body"],
+    ),
+)
+
+
+_gmail_draft_reply_decl = types.FunctionDeclaration(
+    name="gmail_draft_reply",
+    description=(
+        "Create a Gmail draft REPLY to an existing message (preserves the "
+        "thread and adds Re: prefix if needed). Uses the original sender as "
+        "the recipient. Draft is saved — NOT sent. Use when the user asks "
+        "you to reply to a specific email (email_id comes from list_recent "
+        "or search). Destructive-observable — user will confirm the reply "
+        "body before the draft is saved."
+    ),
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "email_id": types.Schema(type="STRING", description="Gmail message ID being replied to"),
+            "body": types.Schema(type="STRING", description="Plain-text reply body"),
+        },
+        required=["email_id", "body"],
+    ),
+)
+
+
 _gmail_search_decl = types.FunctionDeclaration(
     name="gmail_search",
     description=(
@@ -269,6 +318,8 @@ FS_TOOL = types.Tool(function_declarations=[
     _gmail_list_decl,
     _gmail_read_decl,
     _gmail_search_decl,
+    _gmail_draft_new_decl,
+    _gmail_draft_reply_decl,
 ])
 
 ALL_TOOLS = [FS_TOOL]
@@ -277,7 +328,7 @@ ALL_TOOLS = [FS_TOOL]
 # Tools that mutate the file system — the agent loop must confirm with the
 # user before executing these. Keep this set narrow; adding a name here is a
 # statement that the operation is destructive and non-recoverable.
-DESTRUCTIVE_TOOLS = {"write_file"}
+DESTRUCTIVE_TOOLS = {"write_file", "gmail_draft_new", "gmail_draft_reply"}
 
 
 def preview_action(name: str, args: dict) -> str:
@@ -306,6 +357,41 @@ def preview_action(name: str, args: dict) -> str:
             f"  preview: |\n"
             f"    {content_preview.replace(chr(10), chr(10) + '    ')}"
         )
+
+    if name == "gmail_draft_new":
+        to = args.get("to", "?")
+        cc = args.get("cc", "")
+        subject = args.get("subject", "?")
+        body = args.get("body", "")
+        preview_len = 500
+        body_preview = body[:preview_len]
+        if len(body) > preview_len:
+            body_preview += f"\n... [+{len(body) - preview_len} more chars]"
+        lines = [
+            f"  action:  save draft (NOT sent — will sit in Gmail Drafts)",
+            f"  to:      {to}",
+        ]
+        if cc:
+            lines.append(f"  cc:      {cc}")
+        lines.append(f"  subject: {subject}")
+        lines.append(f"  body:    |")
+        lines.append(f"    {body_preview.replace(chr(10), chr(10) + '    ')}")
+        return "\n".join(lines)
+
+    if name == "gmail_draft_reply":
+        email_id = args.get("email_id", "?")
+        body = args.get("body", "")
+        preview_len = 500
+        body_preview = body[:preview_len]
+        if len(body) > preview_len:
+            body_preview += f"\n... [+{len(body) - preview_len} more chars]"
+        return (
+            f"  action:  save draft REPLY (NOT sent — will sit in Gmail Drafts)\n"
+            f"  reply to: message id={email_id}\n"
+            f"  body:    |\n"
+            f"    {body_preview.replace(chr(10), chr(10) + '    ')}"
+        )
+
     return f"  (no preview available for '{name}')"
 
 
@@ -346,6 +432,8 @@ TOOL_DISPATCH = {
     "gmail_list_recent": _wrap(lambda n=10: gmail_list_recent(n)),
     "gmail_read_email":  _wrap(lambda email_id: gmail_read_email(email_id)),
     "gmail_search":      _wrap(lambda query, n=10: gmail_search(query, n)),
+    "gmail_draft_new":   _wrap(lambda to, subject, body, cc="": gmail_draft_new(to, subject, body, cc)),
+    "gmail_draft_reply": _wrap(lambda email_id, body: gmail_draft_reply(email_id, body)),
 }
 
 

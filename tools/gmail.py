@@ -279,3 +279,97 @@ def search(query: str, n: int = 10) -> str:
         lines.append("")
 
     return "\n".join(lines).rstrip()
+
+
+# ── Draft tools ───────────────────────────────────────────────────────────
+
+from email.message import EmailMessage
+
+
+def _build_raw_message(to: str, subject: str, body: str,
+                       in_reply_to: str = "", references: str = "",
+                       cc: str = "") -> str:
+    """Assemble an RFC-2822 message and return it base64-url-encoded for Gmail."""
+    msg = EmailMessage()
+    msg["To"] = to
+    if cc:
+        msg["Cc"] = cc
+    msg["Subject"] = subject
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+    if references:
+        msg["References"] = references
+    msg.set_content(body)
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
+    return raw
+
+
+def draft_new(to: str, subject: str, body: str, cc: str = "") -> str:
+    """Create a new Gmail draft. Does NOT send — draft lives in the Drafts folder."""
+    if not to or not subject or not body:
+        return "Error: to, subject, and body are all required."
+
+    try:
+        svc = get_service()
+    except GmailAuthError as e:
+        return f"Error: {e}"
+
+    raw = _build_raw_message(to=to, subject=subject, body=body, cc=cc)
+    try:
+        draft = svc.users().drafts().create(
+            userId="me",
+            body={"message": {"raw": raw}},
+        ).execute()
+    except HttpError as e:
+        return f"Error: draft create failed — {e}"
+
+    return f"Draft created (id={draft.get('id')}). Review in Gmail's Drafts folder."
+
+
+def draft_reply(email_id: str, body: str) -> str:
+    """Create a Gmail draft reply to an existing message. Preserves threading."""
+    if not email_id or not body:
+        return "Error: email_id and body are both required."
+
+    try:
+        svc = get_service()
+    except GmailAuthError as e:
+        return f"Error: {e}"
+
+    try:
+        orig = svc.users().messages().get(
+            userId="me", id=email_id, format="metadata",
+            metadataHeaders=["From", "Subject", "Message-ID", "References"],
+        ).execute()
+    except HttpError as e:
+        return f"Error: could not fetch original email {email_id} — {e}"
+
+    headers = orig.get("payload", {}).get("headers", [])
+    orig_from = _header(headers, "From")
+    orig_subject = _header(headers, "Subject")
+    orig_msg_id = _header(headers, "Message-ID")
+    orig_refs = _header(headers, "References")
+    thread_id = orig.get("threadId")
+
+    reply_subject = orig_subject if orig_subject.lower().startswith("re:") else f"Re: {orig_subject}"
+    references = f"{orig_refs} {orig_msg_id}".strip() if orig_refs else orig_msg_id
+
+    raw = _build_raw_message(
+        to=orig_from,
+        subject=reply_subject,
+        body=body,
+        in_reply_to=orig_msg_id,
+        references=references,
+    )
+    try:
+        draft = svc.users().drafts().create(
+            userId="me",
+            body={"message": {"raw": raw, "threadId": thread_id}},
+        ).execute()
+    except HttpError as e:
+        return f"Error: draft-reply create failed — {e}"
+
+    return (
+        f"Draft reply created (id={draft.get('id')}) in thread {thread_id}. "
+        f"Review in Gmail's Drafts folder."
+    )
