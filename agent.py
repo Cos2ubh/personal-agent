@@ -9,6 +9,8 @@ Special commands (type during chat):
   /permissions            — re-run the file system access wizard
   /access                 — show current read + write scopes
   /audit [N]              — show last N file system operations (default 10)
+  /gmail-auth             — sign in to Gmail (one-time OAuth flow)
+  /gmail-status           — check whether Gmail is authenticated
   /help                   — show this command list
   /quit  or  quit         — exit
 """
@@ -131,6 +133,28 @@ def handle_command(raw: str, semantic: SemanticMemory) -> bool:
             n = int(rest)
         print(f"  Last {n} FS operations:")
         print(audit_tail(n))
+        return True
+
+    if cmd == "/gmail-auth":
+        from tools.gmail import run_oauth_flow, GmailAuthError
+        try:
+            run_oauth_flow()
+            print("  ✓ Gmail authenticated. Token saved locally.")
+        except GmailAuthError as e:
+            print(f"  ✗ {e}")
+        except Exception as e:
+            print(f"  ✗ Unexpected error during OAuth flow: {e}")
+        return True
+
+    if cmd == "/gmail-status":
+        from tools.gmail import is_authenticated, CREDENTIALS_PATH, TOKEN_PATH
+        if not CREDENTIALS_PATH.exists():
+            print(f"  ✗ credentials.json missing at {CREDENTIALS_PATH}")
+            print("    Follow setup steps at the top of tools/gmail.py.")
+        elif not is_authenticated():
+            print(f"  ✗ Not signed in. Run /gmail-auth.")
+        else:
+            print(f"  ✓ Gmail authenticated. Token at {TOKEN_PATH}")
         return True
 
     if cmd == "/help":
