@@ -14,6 +14,7 @@ from google.genai import types
 
 from tools.filesystem import read_file, list_dir, write_file, find_files, PermissionDenied
 from tools.doc_extract import extract_text as doc_extract_text
+from memory.doc_index import search_documents, format_search_results
 from tools.web import fetch as web_fetch, search as web_search
 from tools.gmail import (
     list_recent as gmail_list_recent,
@@ -269,6 +270,35 @@ _web_search_decl = types.FunctionDeclaration(
 )
 
 
+_search_docs_decl = types.FunctionDeclaration(
+    name="search_documents_by_content",
+    description=(
+        "Semantic search across the user's INDEXED documents by content, not "
+        "filename. Use when the user asks to find something by its topic or "
+        "contents — 'find my marksheet', 'where's that invoice for the laptop', "
+        "'which doc mentions quarterly review'. Returns filenames + snippets "
+        "of the top matches. The user must have run /index-docs at least once "
+        "for their documents to be searchable. If a search returns nothing, "
+        "suggest they run /index-docs, or fall back to find_files for a "
+        "name-based search."
+    ),
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "query": types.Schema(
+                type="STRING",
+                description="Natural-language description of what to look for",
+            ),
+            "n": types.Schema(
+                type="INTEGER",
+                description="Max results (1–20, default 5)",
+            ),
+        },
+        required=["query"],
+    ),
+)
+
+
 _extract_text_decl = types.FunctionDeclaration(
     name="extract_text",
     description=(
@@ -339,6 +369,7 @@ FS_TOOL = types.Tool(function_declarations=[
     _write_file_decl,
     _find_files_decl,
     _extract_text_decl,
+    _search_docs_decl,
     _list_allowed_paths_decl,
     _web_fetch_decl,
     _web_search_decl,
@@ -454,6 +485,7 @@ TOOL_DISPATCH = {
     "write_file":        _wrap(lambda path, content: write_file(path, content)),
     "find_files":        _wrap(lambda pattern, extension="", path_hint="": "\n".join(find_files(pattern, extension, path_hint))),
     "extract_text":      _wrap(lambda path: doc_extract_text(path)),
+    "search_documents_by_content": _wrap(lambda query, n=5: format_search_results(query, search_documents(query, n))),
     "list_allowed_paths": _wrap(lambda: _list_allowed_paths_impl()),
     "web_fetch":         _wrap(lambda url: web_fetch(url)),
     "web_search":        _wrap(lambda query, max_results=5: web_search(query, max_results)),

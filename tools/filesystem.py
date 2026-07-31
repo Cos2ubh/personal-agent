@@ -29,6 +29,7 @@ SENSITIVE_NAME_PATTERNS = [
     ".git-credentials",
     "authorized_keys", "known_hosts",
     "*.password", "*.secret",
+    "token_*.json", "token.json",         # OAuth refresh tokens
 ]
 
 # Directory names (case-insensitive) whose contents are entirely off-limits.

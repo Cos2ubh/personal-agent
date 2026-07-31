@@ -11,10 +11,12 @@ Special commands (type during chat):
   /audit [N]              — show last N file system operations (default 10)
   /gmail-auth             — sign in to Gmail (one-time OAuth flow)
   /gmail-status           — check whether Gmail is authenticated
+  /index-docs             — build/refresh semantic index of PDFs/DOCX/text in read scope
   /help                   — show this command list
   /quit  or  quit         — exit
 """
 
+from pathlib import Path
 from config import fs_permissions_configured, setup_fs_permissions, get_read_paths, get_write_paths
 from llm import call_llm
 from memory.semantic import SemanticMemory
@@ -156,6 +158,25 @@ def handle_command(raw: str, semantic: SemanticMemory) -> bool:
             print(f"  ✗ Not signed in. Run /gmail-auth.")
         else:
             print(f"  ✓ Gmail authenticated. Token at {TOKEN_PATH}")
+        return True
+
+    if cmd == "/index-docs":
+        from memory.doc_index import index_all
+
+        def _progress(i, total, path):
+            # Overwrite same line for a cheap progress bar
+            print(f"\r  Indexing [{i}/{total}] {path.name[:60]:<60}", end="", flush=True)
+
+        print("  Building document index — this can take a while on first run.")
+        summary = index_all(progress_callback=_progress)
+        print()  # newline after progress
+        print(f"  ✓ Indexed: {summary['indexed']}")
+        print(f"    Skipped (unchanged): {summary['skipped']}")
+        print(f"    Removed (deleted from disk): {summary['removed']}")
+        if summary["errors"]:
+            print(f"    Errors: {len(summary['errors'])} (first 3 shown)")
+            for path_str, err in summary["errors"][:3]:
+                print(f"      - {Path(path_str).name}: {err[:80]}")
         return True
 
     if cmd == "/help":
