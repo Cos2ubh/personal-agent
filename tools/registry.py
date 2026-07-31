@@ -13,6 +13,7 @@ from pathlib import Path
 from google.genai import types
 
 from tools.filesystem import read_file, list_dir, write_file, find_files, PermissionDenied
+from tools.doc_extract import extract_text as doc_extract_text
 from tools.web import fetch as web_fetch, search as web_search
 from tools.gmail import (
     list_recent as gmail_list_recent,
@@ -268,6 +269,31 @@ _web_search_decl = types.FunctionDeclaration(
 )
 
 
+_extract_text_decl = types.FunctionDeclaration(
+    name="extract_text",
+    description=(
+        "Extract plain text from a document. Supports PDF (via pypdf), DOCX "
+        "(via python-docx), and text-family formats (.txt, .md, .csv, .json, "
+        "and common source-code extensions). Respects the read sandbox — "
+        "same rules as read_file. Use this instead of read_file when the "
+        "user asks to open a marksheet, invoice, resume, contract, or any "
+        "document that isn't plain text. Returns an error string for "
+        "unsupported types, scanned/image PDFs (no OCR yet), and files "
+        "over 10 MB."
+    ),
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "path": types.Schema(
+                type="STRING",
+                description="Absolute path to the document file",
+            ),
+        },
+        required=["path"],
+    ),
+)
+
+
 _web_fetch_decl = types.FunctionDeclaration(
     name="web_fetch",
     description=(
@@ -312,6 +338,7 @@ FS_TOOL = types.Tool(function_declarations=[
     _list_dir_decl,
     _write_file_decl,
     _find_files_decl,
+    _extract_text_decl,
     _list_allowed_paths_decl,
     _web_fetch_decl,
     _web_search_decl,
@@ -426,6 +453,7 @@ TOOL_DISPATCH = {
     "list_dir":          _wrap(lambda path: "\n".join(list_dir(path))),
     "write_file":        _wrap(lambda path, content: write_file(path, content)),
     "find_files":        _wrap(lambda pattern, extension="", path_hint="": "\n".join(find_files(pattern, extension, path_hint))),
+    "extract_text":      _wrap(lambda path: doc_extract_text(path)),
     "list_allowed_paths": _wrap(lambda: _list_allowed_paths_impl()),
     "web_fetch":         _wrap(lambda url: web_fetch(url)),
     "web_search":        _wrap(lambda query, max_results=5: web_search(query, max_results)),
