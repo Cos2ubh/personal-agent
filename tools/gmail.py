@@ -32,6 +32,7 @@ from googleapiclient.errors import HttpError
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/gmail.send",
 ]
 
 _DATA_DIR = Path(__file__).parent.parent / "data"
@@ -372,4 +373,62 @@ def draft_reply(email_id: str, body: str) -> str:
     return (
         f"Draft reply created (id={draft.get('id')}) in thread {thread_id}. "
         f"Review in Gmail's Drafts folder."
+    )
+
+
+def get_draft_preview(draft_id: str) -> dict:
+    """
+    Fetch a draft's To / Subject / body-snippet for the approval preview.
+    Returns a dict with keys: to, subject, body_snippet, error.
+    """
+    if not draft_id:
+        return {"error": "draft_id is empty"}
+    try:
+        svc = get_service()
+    except GmailAuthError as e:
+        return {"error": str(e)}
+
+    try:
+        draft = svc.users().drafts().get(userId="me", id=draft_id, format="full").execute()
+    except HttpError as e:
+        return {"error": f"Gmail get-draft failed — {e}"}
+
+    msg = draft.get("message", {})
+    payload = msg.get("payload", {})
+    headers = payload.get("headers", [])
+    body = _decode_body(payload) or "(no readable body)"
+    if len(body) > 500:
+        body = body[:500] + "..."
+
+    return {
+        "to": _header(headers, "To"),
+        "subject": _header(headers, "Subject") or "(no subject)",
+        "body_snippet": body,
+        "error": "",
+    }
+
+
+def send_draft(draft_id: str) -> str:
+    """
+    Send an existing draft. This is the ONLY send path — you cannot send a
+    message without first creating a draft. That way the user always has a
+    chance to review the exact bytes that will hit the wire.
+    """
+    if not draft_id:
+        return "Error: draft_id is empty."
+
+    try:
+        svc = get_service()
+    except GmailAuthError as e:
+        return f"Error: {e}"
+
+    try:
+        result = svc.users().drafts().send(userId="me", body={"id": draft_id}).execute()
+    except HttpError as e:
+        return f"Error: send failed — {e}"
+
+    return (
+        f"Sent. Gmail message id={result.get('id')}, "
+        f"thread={result.get('threadId')}. "
+        f"Check your Sent folder."
     )

@@ -22,7 +22,10 @@ from llm import call_llm
 from memory.semantic import SemanticMemory
 from memory.episodic import EpisodicMemory
 from memory.extractor import extract_facts
-from tools.registry import ALL_TOOLS, execute_tool, DESTRUCTIVE_TOOLS, preview_action, record_declined
+from tools.registry import (
+    ALL_TOOLS, execute_tool, DESTRUCTIVE_TOOLS, HARD_APPROVAL_TOOLS,
+    HARD_APPROVAL_WORD, preview_action, record_declined,
+)
 from tools.audit import format_tail as audit_tail
 
 MAX_TOOL_ITERATIONS = 6  # hard cap on tool-call chains per user turn
@@ -210,16 +213,31 @@ def run_agentic_turn(user_input: str, history: list[dict], system: str) -> str:
                     "args": tc.args,
                 })
 
-                # Destructive tools need explicit user approval before running
+                # Destructive tools need explicit user approval before running.
+                # Tools in HARD_APPROVAL_TOOLS need a full-word confirmation (not just 'y').
                 if tc.name in DESTRUCTIVE_TOOLS:
-                    print("  ─── Approval needed ─────────────────────────────")
+                    hard = tc.name in HARD_APPROVAL_TOOLS
+                    banner = "⚠  HARD APPROVAL — irreversible action" if hard else "Approval needed"
+                    print(f"  ─── {banner} ─────────────────────────────")
                     print(preview_action(tc.name, tc.args))
                     print("  ─────────────────────────────────────────────────")
+
+                    if hard:
+                        prompt_msg = f"  Type {HARD_APPROVAL_WORD} to confirm (anything else aborts): "
+                    else:
+                        prompt_msg = "  Approve? [y/N]: "
+
                     try:
-                        answer = input("  Approve? [y/N]: ").strip().lower()
+                        answer = input(prompt_msg).strip()
                     except (EOFError, KeyboardInterrupt):
                         answer = ""
-                    if answer != "y":
+
+                    if hard:
+                        approved = answer == HARD_APPROVAL_WORD  # case-sensitive
+                    else:
+                        approved = answer.lower() == "y"
+
+                    if not approved:
                         result = f"User declined the {tc.name} operation. Do not retry unless the user changes their mind."
                         print(f"  [declined by user]")
                         record_declined(tc.name, tc.args)

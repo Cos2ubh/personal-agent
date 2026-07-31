@@ -22,6 +22,8 @@ from tools.gmail import (
     search as gmail_search,
     draft_new as gmail_draft_new,
     draft_reply as gmail_draft_reply,
+    send_draft as gmail_send_draft,
+    get_draft_preview as gmail_get_draft_preview,
 )
 from tools.audit import log as audit_log
 from config import get_read_paths, get_write_paths
@@ -190,6 +192,31 @@ _gmail_draft_new_decl = types.FunctionDeclaration(
             "cc": types.Schema(type="STRING", description="Optional CC recipients, comma-separated"),
         },
         required=["to", "subject", "body"],
+    ),
+)
+
+
+_gmail_send_draft_decl = types.FunctionDeclaration(
+    name="gmail_send_draft",
+    description=(
+        "Send an existing Gmail draft by its ID. This is the ONLY way to send "
+        "email — you cannot send an arbitrary message directly, you must first "
+        "create a draft with gmail_draft_new or gmail_draft_reply, and only "
+        "then send it by ID. Use this when the user says 'send it', 'send "
+        "the draft', or explicitly asks to send a specific draft. The user "
+        "will be asked to type 'SEND' (not just 'y') to confirm — this is "
+        "the strongest approval gate in the system because sends are "
+        "unrecoverable."
+    ),
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "draft_id": types.Schema(
+                type="STRING",
+                description="Gmail draft ID (from gmail_draft_new or gmail_draft_reply)",
+            ),
+        },
+        required=["draft_id"],
     ),
 )
 
@@ -378,6 +405,7 @@ FS_TOOL = types.Tool(function_declarations=[
     _gmail_search_decl,
     _gmail_draft_new_decl,
     _gmail_draft_reply_decl,
+    _gmail_send_draft_decl,
 ])
 
 ALL_TOOLS = [FS_TOOL]
@@ -386,7 +414,13 @@ ALL_TOOLS = [FS_TOOL]
 # Tools that mutate the file system — the agent loop must confirm with the
 # user before executing these. Keep this set narrow; adding a name here is a
 # statement that the operation is destructive and non-recoverable.
-DESTRUCTIVE_TOOLS = {"write_file", "gmail_draft_new", "gmail_draft_reply"}
+DESTRUCTIVE_TOOLS = {"write_file", "gmail_draft_new", "gmail_draft_reply", "gmail_send_draft"}
+
+# Tools that require typing an explicit uppercase confirmation word (not just 'y').
+# Reserved for actions that leave the machine and can't be undone: emails to third
+# parties, payments (later), etc.
+HARD_APPROVAL_TOOLS = {"gmail_send_draft"}
+HARD_APPROVAL_WORD = "SEND"
 
 
 def preview_action(name: str, args: dict) -> str:
@@ -450,6 +484,25 @@ def preview_action(name: str, args: dict) -> str:
             f"    {body_preview.replace(chr(10), chr(10) + '    ')}"
         )
 
+    if name == "gmail_send_draft":
+        draft_id = args.get("draft_id", "?")
+        # Fetch the actual draft so the user sees EXACTLY what will be sent
+        prev = gmail_get_draft_preview(draft_id)
+        if prev.get("error"):
+            return (
+                f"  action:  SEND draft {draft_id}\n"
+                f"  ⚠  Could not preview draft contents: {prev['error']}\n"
+                f"  Proceed only if you're certain this draft is correct."
+            )
+        return (
+            f"  action:  ⚠ SEND email — this will leave your machine and cannot be undone\n"
+            f"  draft:   id={draft_id}\n"
+            f"  to:      {prev['to']}\n"
+            f"  subject: {prev['subject']}\n"
+            f"  body:    |\n"
+            f"    {prev['body_snippet'].replace(chr(10), chr(10) + '    ')}"
+        )
+
     return f"  (no preview available for '{name}')"
 
 
@@ -494,6 +547,7 @@ TOOL_DISPATCH = {
     "gmail_search":      _wrap(lambda query, n=10: gmail_search(query, n)),
     "gmail_draft_new":   _wrap(lambda to, subject, body, cc="": gmail_draft_new(to, subject, body, cc)),
     "gmail_draft_reply": _wrap(lambda email_id, body: gmail_draft_reply(email_id, body)),
+    "gmail_send_draft":  _wrap(lambda draft_id: gmail_send_draft(draft_id)),
 }
 
 
