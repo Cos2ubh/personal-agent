@@ -19,6 +19,7 @@ from config import fs_permissions_configured, setup_fs_permissions, get_read_pat
 from llm import call_llm
 from memory.semantic import SemanticMemory
 from memory.episodic import EpisodicMemory
+from memory.extractor import extract_facts
 from tools.registry import ALL_TOOLS, execute_tool, DESTRUCTIVE_TOOLS, preview_action, record_declined
 from tools.audit import format_tail as audit_tail
 
@@ -270,6 +271,15 @@ def main():
 
         # Persist to episodic memory (only the user text + final agent reply)
         episodic.save_turn(user_input, reply)
+
+        # Best-effort background fact extraction — silent on failure
+        try:
+            new_facts = extract_facts(user_input, semantic.all())
+            for key, value in new_facts:
+                semantic.set(key, value)
+                print(f"  [remembered: {key} = {value}]")
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
