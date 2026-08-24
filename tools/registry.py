@@ -16,6 +16,7 @@ from tools.filesystem import read_file, list_dir, write_file, find_files, Permis
 from tools.doc_extract import extract_text as doc_extract_text
 from memory.doc_index import search_documents, format_search_results
 from memory.image_index import search_images, format_search_results as format_image_results
+from memory.face_index import register_face as face_register, list_registered as face_list, find_photos_of as face_find
 from memory.reminders import Reminders, parse_time, format_due
 from memory.briefing import compose as compose_briefing
 from memory.semantic import SemanticMemory
@@ -376,6 +377,52 @@ _morning_briefing_decl = types.FunctionDeclaration(
 )
 
 
+_register_face_decl = types.FunctionDeclaration(
+    name="register_face",
+    description=(
+        "Register a person's face for later photo-search. Point at one clear "
+        "sample image containing that person and give them a name. Use when "
+        "the user says 'this is me / this is Priya / register X's face'. "
+        "The largest face in the sample image is used. Registered faces are "
+        "stored locally — no image ever leaves the machine."
+    ),
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "name": types.Schema(type="STRING", description="Person's name (used as the lookup key)"),
+            "sample_path": types.Schema(type="STRING", description="Absolute path to a clear photo of the person"),
+        },
+        required=["name", "sample_path"],
+    ),
+)
+
+
+_list_faces_decl = types.FunctionDeclaration(
+    name="list_registered_faces",
+    description="Return the list of people whose faces have been registered for photo-search.",
+    parameters=types.Schema(type="OBJECT", properties={}),
+)
+
+
+_find_photos_of_decl = types.FunctionDeclaration(
+    name="find_photos_of",
+    description=(
+        "Find indexed photos likely to contain a specific registered person. "
+        "The person must already be registered via register_face. Requires "
+        "/index-faces to have been run so the read-scope photos are searchable. "
+        "Returns unique file paths of matching photos."
+    ),
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "name": types.Schema(type="STRING", description="Registered person's name"),
+            "n": types.Schema(type="INTEGER", description="Max photos to return (1–100, default 20)"),
+        },
+        required=["name"],
+    ),
+)
+
+
 _search_images_decl = types.FunctionDeclaration(
     name="search_images_by_description",
     description=(
@@ -593,6 +640,9 @@ FS_TOOL = types.Tool(function_declarations=[
     _extract_text_decl,
     _search_docs_decl,
     _search_images_decl,
+    _register_face_decl,
+    _list_faces_decl,
+    _find_photos_of_decl,
     _set_reminder_decl,
     _list_reminders_decl,
     _complete_reminder_decl,
@@ -804,6 +854,9 @@ TOOL_DISPATCH = {
     "extract_text":      _wrap(lambda path: doc_extract_text(path)),
     "search_documents_by_content": _wrap(lambda query, n=5: format_search_results(query, search_documents(query, n))),
     "search_images_by_description": _wrap(lambda query, n=5: format_image_results(query, search_images(query, n))),
+    "register_face":          _wrap(lambda name, sample_path: face_register(name, sample_path)),
+    "list_registered_faces":  _wrap(lambda: face_list()),
+    "find_photos_of":         _wrap(lambda name, n=20: face_find(name, n=n)),
     "set_reminder":      _wrap(lambda text, when: _set_reminder_impl(text, when)),
     "list_reminders":    _wrap(lambda include_completed=False: _list_reminders_impl(include_completed)),
     "complete_reminder": _wrap(lambda reminder_id: _complete_reminder_impl(reminder_id)),

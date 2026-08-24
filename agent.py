@@ -13,6 +13,7 @@ Special commands (type during chat):
   /gmail-status           — check whether Gmail is authenticated
   /index-docs             — build/refresh semantic index of PDFs/DOCX/text in read scope
   /index-images           — build/refresh CLIP image index (photos/screenshots in read scope)
+  /index-faces            — build/refresh face-recognition index (detects + embeds faces per image)
   /reminders              — list all pending reminders
   /briefing               — daily summary: reminders, unread email, weather
   /help                   — show this command list
@@ -215,6 +216,24 @@ def handle_command(raw: str, semantic: SemanticMemory) -> bool:
         summary = index_images_all(progress_callback=_progress)
         print()
         print(f"  ✓ Indexed: {summary['indexed']}")
+        print(f"    Skipped (unchanged): {summary['skipped']}")
+        print(f"    Removed (deleted from disk): {summary['removed']}")
+        if summary["errors"]:
+            print(f"    Errors: {len(summary['errors'])} (first 3 shown)")
+            for path_str, err in summary["errors"][:3]:
+                print(f"      - {Path(path_str).name}: {err[:80]}")
+        return True
+
+    if cmd == "/index-faces":
+        from memory.face_index import index_all as index_faces_all
+
+        def _progress(i, total, path):
+            print(f"\r  Indexing faces [{i}/{total}] {path.name[:60]:<60}", end="", flush=True)
+
+        print("  Building face index — first run downloads InsightFace models (~50 MB) and then detects faces in every image.")
+        summary = index_faces_all(progress_callback=_progress)
+        print()
+        print(f"  ✓ Indexed: {summary['indexed']}  (faces found: {summary['faces_found']})")
         print(f"    Skipped (unchanged): {summary['skipped']}")
         print(f"    Removed (deleted from disk): {summary['removed']}")
         if summary["errors"]:
