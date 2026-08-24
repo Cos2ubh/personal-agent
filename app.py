@@ -8,7 +8,15 @@ The UI mirrors the CLI: chat pane in the main column, sidebar showing facts,
 allow-list, and recent audit entries. Destructive tools (write_file, drafts,
 sends) pause the loop and render an approval card — same human-in-the-loop
 gate as the CLI, just rendered as buttons instead of a terminal prompt.
+
+Image-search tools additionally render thumbnails inline so I don't have to
+copy paths and open them by hand.
 """
+
+import os
+import re
+import subprocess
+from pathlib import Path
 
 import streamlit as st
 
@@ -29,6 +37,54 @@ from tools.registry import (
 from tools.audit import format_tail
 
 MAX_TOOL_ITERATIONS = 6
+
+# Tools whose results contain image file paths we want to preview inline
+_IMAGE_RETURN_TOOLS = {"search_images_by_description", "find_photos_of"}
+
+# Matches absolute Windows paths ending in image extensions
+_IMAGE_PATH_RE = re.compile(
+    r"([A-Za-z]:[\\/](?:[^\r\n<>|\"?*]+[\\/])*[^\r\n<>|\"?*]+?\.(?:jpg|jpeg|png|webp|bmp|gif))",
+    re.IGNORECASE,
+)
+
+
+def _extract_image_paths(text: str) -> list[str]:
+    """Return unique, existing image paths mentioned in text (preserves order)."""
+    if not text:
+        return []
+    seen, out = set(), []
+    for match in _IMAGE_PATH_RE.findall(text):
+        # Strip trailing punctuation the regex might've greedily grabbed
+        candidate = match.rstrip(".,;:)")
+        if candidate in seen:
+            continue
+        try:
+            if Path(candidate).is_file():
+                seen.add(candidate)
+                out.append(candidate)
+        except OSError:
+            continue
+    return out
+
+
+def _open_in_default_viewer(path: str):
+    """Open a file in the OS default handler. No-op on failure."""
+    try:
+        if os.name == "nt":
+            os.startfile(path)  # type: ignore[attr-defined]
+        elif os.name == "posix":
+            subprocess.Popen(["xdg-open", path])
+    except Exception:
+        pass
+
+
+def _reveal_in_explorer(path: str):
+    """Open the file's folder in Explorer with the file selected."""
+    try:
+        if os.name == "nt":
+            subprocess.Popen(["explorer", "/select,", path])
+    except Exception:
+        pass
 
 SYSTEM_BASE = """You are a personal AI assistant — a Chief of Staff for the user.
 You are running as a local Streamlit app on their machine. You remember facts
@@ -131,13 +187,40 @@ def render_sidebar():
 # ── Chat history renderer ─────────────────────────────────────────────────
 
 def render_chat_history():
-    for msg in st.session_state.display_messages:
+    for idx, msg in enumerate(st.session_state.display_messages):
         role = msg["role"]
         if role == "tool_info":
             st.info(msg["content"], icon="🔧")
+        elif role == "image_gallery":
+            _render_image_gallery(msg.get("images", []), idx)
         else:
             with st.chat_message(role):
                 st.markdown(msg["content"])
+
+
+def _render_image_gallery(paths: list[str], msg_idx: int):
+    """Render a grid of image previews with open + reveal buttons."""
+    if not paths:
+        return
+    with st.chat_message("assistant"):
+        st.markdown(f"**{len(paths)} image match(es):**")
+        cols_per_row = 3
+        for row_start in range(0, len(paths), cols_per_row):
+            row_paths = paths[row_start:row_start + cols_per_row]
+            cols = st.columns(len(row_paths))
+            for i, path in enumerate(row_paths):
+                with cols[i]:
+                    try:
+                        st.image(path, caption=Path(path).name, use_container_width=True)
+                    except Exception as e:
+                        st.caption(f"Can't render {Path(path).name}: {e}")
+                    global_i = row_start + i
+                    key_base = f"img_{msg_idx}_{global_i}"
+                    b1, b2 = st.columns(2)
+                    if b1.button("Open", key=f"{key_base}_open", use_container_width=True):
+                        _open_in_default_viewer(path)
+                    if b2.button("Reveal", key=f"{key_base}_reveal", use_container_width=True):
+                        _reveal_in_explorer(path)
 
 
 # ── Approval card ─────────────────────────────────────────────────────────
@@ -257,6 +340,14 @@ def _run_loop():
                     "role": "tool_info",
                     "content": f"**{tc.name}** — `{summary}`",
                 })
+                # If the tool returned image paths, render a gallery inline
+                if tc.name in _IMAGE_RETURN_TOOLS:
+                    paths = _extract_image_paths(result)
+                    if paths:
+                        ss.display_messages.append({
+                            "role": "image_gallery",
+                            "images": paths,
+                        })
                 ss.history.append({"role": "tool", "name": tc.name, "content": result})
             continue  # loop back to call_llm with new tool results
 
