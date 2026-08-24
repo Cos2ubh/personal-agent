@@ -12,6 +12,7 @@ Special commands (type during chat):
   /gmail-auth             — sign in to Gmail (one-time OAuth flow)
   /gmail-status           — check whether Gmail is authenticated
   /index-docs             — build/refresh semantic index of PDFs/DOCX/text in read scope
+  /reminders              — list all pending reminders
   /help                   — show this command list
   /quit  or  quit         — exit
 """
@@ -22,6 +23,7 @@ from llm import call_llm
 from memory.semantic import SemanticMemory
 from memory.episodic import EpisodicMemory
 from memory.extractor import extract_facts
+from memory.reminders import Reminders, format_due
 from tools.registry import (
     ALL_TOOLS, execute_tool, DESTRUCTIVE_TOOLS, HARD_APPROVAL_TOOLS,
     HARD_APPROVAL_WORD, preview_action, record_declined,
@@ -163,6 +165,17 @@ def handle_command(raw: str, semantic: SemanticMemory) -> bool:
             print(f"  ✓ Gmail authenticated. Token at {TOKEN_PATH}")
         return True
 
+    if cmd == "/reminders":
+        rem = Reminders()
+        items = rem.list_all(include_completed=False)
+        if not items:
+            print("  No active reminders.")
+        else:
+            print(f"  {len(items)} active reminder(s):")
+            for r in items:
+                print(f"    #{r['id']}  {format_due(r['due_at'])}  —  {r['text']}")
+        return True
+
     if cmd == "/index-docs":
         from memory.doc_index import index_all
 
@@ -266,6 +279,19 @@ def run_agentic_turn(user_input: str, history: list[dict], system: str) -> str:
     return msg
 
 
+def _surface_due_reminders():
+    """Print a banner for any reminders that came due since the last check."""
+    rem = Reminders()
+    due = rem.due_now()
+    if not due:
+        return
+    print("─── Reminders due ──────────────────────────────────────────")
+    for r in due:
+        print(f"  ⏰ #{r['id']}  ({format_due(r['due_at'])})  —  {r['text']}")
+        rem.mark_notified(r["id"])
+    print("────────────────────────────────────────────────────────────\n")
+
+
 def main():
     print("─── Personal Agent ─────────────────────────────────────────")
     print("Type /help for commands, 'quit' to exit.\n")
@@ -273,6 +299,8 @@ def main():
     if not fs_permissions_configured():
         print("First run detected — let's configure file system access.\n")
         setup_fs_permissions()
+
+    _surface_due_reminders()
 
     semantic = SemanticMemory()
     episodic = EpisodicMemory()

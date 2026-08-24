@@ -20,6 +20,7 @@ from llm import call_llm
 from memory.semantic import SemanticMemory
 from memory.episodic import EpisodicMemory
 from memory.extractor import extract_facts
+from memory.reminders import Reminders, format_due
 from tools.registry import (
     ALL_TOOLS, execute_tool, DESTRUCTIVE_TOOLS, HARD_APPROVAL_TOOLS,
     HARD_APPROVAL_WORD, preview_action, record_declined,
@@ -58,6 +59,8 @@ def _init_state():
     ss.setdefault("history", [])             # LLM conversation history (roles: user, model, tool_call, tool)
     ss.setdefault("semantic", SemanticMemory())
     ss.setdefault("episodic", EpisodicMemory())
+    ss.setdefault("reminders", Reminders())
+    ss.setdefault("due_reminders_shown", False)
     ss.setdefault("pending_approval", None)  # {"tc_name": str, "tc_args": dict, "hard": bool}
     ss.setdefault("current_user_input", "")  # user text of the in-flight turn (for later extraction)
     ss.setdefault("iterations", 0)
@@ -95,6 +98,15 @@ def render_sidebar():
                     st.code(p, language=None)
             else:
                 st.caption("No write access — read-only agent.")
+
+        pending_reminders = st.session_state.reminders.list_all(include_completed=False)
+        with st.expander(f"⏰ Reminders ({len(pending_reminders)})", expanded=len(pending_reminders) > 0):
+            if pending_reminders:
+                for r in pending_reminders:
+                    st.markdown(f"- **#{r['id']}** — {format_due(r['due_at'])}")
+                    st.caption(r["text"])
+            else:
+                st.caption("No reminders. Say 'remind me to X at Y' to add one.")
 
         with st.expander("🔍 Recent activity"):
             st.text(format_tail(15))
@@ -314,6 +326,18 @@ if not fs_permissions_configured():
         "The Streamlit UI reads the same config."
     )
     st.stop()
+
+# Surface due reminders once per Streamlit session
+if not st.session_state.due_reminders_shown:
+    rem = st.session_state.reminders
+    due = rem.due_now()
+    if due:
+        with st.container(border=True):
+            st.markdown("### ⏰ Reminders due")
+            for r in due:
+                st.markdown(f"- **#{r['id']}** ({format_due(r['due_at'])}) — {r['text']}")
+                rem.mark_notified(r["id"])
+    st.session_state.due_reminders_shown = True
 
 render_sidebar()
 render_chat_history()
