@@ -8,10 +8,12 @@
 #     powershell -ExecutionPolicy Bypass -File scripts\install_notifier.ps1
 #
 # To remove:
-#     schtasks /Delete /TN "PersonalAgentNotifier" /F
+#     Unregister-ScheduledTask -TaskName "PersonalAgentNotifier" -Confirm:$false
 # ----------------------------------------------------------------------------
 
-$ErrorActionPreference = "Stop"
+# We check exit codes / result objects manually — don't want PS auto-throwing
+# on schtasks' stderr writes.
+$ErrorActionPreference = "Continue"
 
 $taskName = "PersonalAgentNotifier"
 $projectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
@@ -19,34 +21,53 @@ $python = Join-Path $projectRoot "venv\Scripts\pythonw.exe"
 $script = Join-Path $projectRoot "notifier.py"
 
 if (-not (Test-Path $python)) {
-    Write-Error "pythonw.exe not found at $python. Is the venv set up?"
+    Write-Host "ERROR: pythonw.exe not found at $python. Is the venv set up?" -ForegroundColor Red
     exit 1
 }
 if (-not (Test-Path $script)) {
-    Write-Error "notifier.py not found at $script."
+    Write-Host "ERROR: notifier.py not found at $script." -ForegroundColor Red
     exit 1
 }
 
-# Remove any existing task with the same name so re-runs are idempotent
-schtasks /Query /TN $taskName 2>$null > $null
-if ($LASTEXITCODE -eq 0) {
+# Remove any existing task so re-runs are idempotent
+$existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+if ($existing) {
     Write-Host "Removing existing task '$taskName'..."
-    schtasks /Delete /TN $taskName /F | Out-Null
+    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
 }
 
-# Create a new task: run every 5 minutes, indefinitely, as the current user
+# Build the task using PowerShell's ScheduledTasks module — argument quoting
+# happens natively and correctly, no schtasks.exe string-parsing footguns.
 Write-Host "Creating scheduled task '$taskName'..."
-$action = "`"$python`" `"$script`""
 
-schtasks /Create `
-    /TN $taskName `
-    /TR $action `
-    /SC MINUTE `
-    /MO 5 `
-    /F | Out-Null
+$action = New-ScheduledTaskAction -Execute $python -Argument "`"$script`""
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "schtasks create failed. You may need to run this from an elevated PowerShell."
+# Fire every 5 minutes for the next 10 years — effectively forever for a
+# personal-agent task. TimeSpan::MaxValue overflows Task Scheduler's XML.
+$trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(1)) `
+    -RepetitionInterval (New-TimeSpan -Minutes 5) `
+    -RepetitionDuration (New-TimeSpan -Days 3650)
+
+# Run whether or not the user is logged on. StartWhenAvailable so a missed
+# fire (laptop asleep) catches up on wake.
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable `
+    -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries `
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
+
+try {
+    # Omit -Principal so the task inherits the current user's identity by default.
+    Register-ScheduledTask `
+        -TaskName $taskName `
+        -Action $action `
+        -Trigger $trigger `
+        -Settings $settings `
+        -Description "Personal Agent — polls the reminders DB and fires Windows toast for anything due." `
+        -Force `
+        -ErrorAction Stop | Out-Null
+} catch {
+    Write-Host "ERROR: Register-ScheduledTask failed: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "Common cause: running from a non-elevated shell." -ForegroundColor Yellow
+    Write-Host "Try right-click PowerShell -> Run as administrator, then retry." -ForegroundColor Yellow
     exit 1
 }
 
@@ -55,10 +76,10 @@ Write-Host "Done. The notifier will run every 5 minutes and fire Windows toast" 
 Write-Host "notifications for any due reminders." -ForegroundColor Green
 Write-Host ""
 Write-Host "Test it now (one-shot):"
-Write-Host "    schtasks /Run /TN $taskName"
+Write-Host "    Start-ScheduledTask -TaskName $taskName"
 Write-Host ""
 Write-Host "Check status:"
-Write-Host "    schtasks /Query /TN $taskName"
+Write-Host "    Get-ScheduledTask -TaskName $taskName"
 Write-Host ""
 Write-Host "Remove later:"
-Write-Host "    schtasks /Delete /TN $taskName /F"
+Write-Host "    Unregister-ScheduledTask -TaskName $taskName -Confirm:`$false"
