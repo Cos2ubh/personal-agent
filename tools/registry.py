@@ -28,6 +28,11 @@ from tools.gmail import (
     send_draft as gmail_send_draft,
     get_draft_preview as gmail_get_draft_preview,
 )
+from tools.calendar import (
+    list_today as cal_list_today,
+    list_upcoming as cal_list_upcoming,
+    create_event as cal_create_event,
+)
 from tools.audit import log as audit_log
 from config import get_read_paths, get_write_paths
 
@@ -195,6 +200,62 @@ _gmail_draft_new_decl = types.FunctionDeclaration(
             "cc": types.Schema(type="STRING", description="Optional CC recipients, comma-separated"),
         },
         required=["to", "subject", "body"],
+    ),
+)
+
+
+_cal_today_decl = types.FunctionDeclaration(
+    name="calendar_list_today",
+    description=(
+        "List calendar events happening today. Use when the user asks about "
+        "today's schedule, what meetings they have, or 'am I free at X'. "
+        "Requires Google auth — same OAuth as Gmail. If not signed in, "
+        "tell the user to run /gmail-auth."
+    ),
+    parameters=types.Schema(type="OBJECT", properties={}),
+)
+
+
+_cal_upcoming_decl = types.FunctionDeclaration(
+    name="calendar_list_upcoming",
+    description=(
+        "List calendar events in the next N days (default 7, max 30). Use "
+        "when the user asks about the coming week, next meeting, or upcoming "
+        "commitments."
+    ),
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "days": types.Schema(
+                type="INTEGER",
+                description="How many days ahead to look (1–30, default 7)",
+            ),
+        },
+    ),
+)
+
+
+_cal_create_decl = types.FunctionDeclaration(
+    name="calendar_create_event",
+    description=(
+        "Create a new calendar event. Destructive — the user will be shown "
+        "a preview and asked to approve before the event is inserted. Use "
+        "when the user asks to schedule / book / add a meeting or event. "
+        "start and end accept natural language ('tomorrow 3pm', 'Friday 10am'). "
+        "If end is omitted, event is 1 hour by default. Attendees receive "
+        "Google Calendar invites via email."
+    ),
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "summary":     types.Schema(type="STRING", description="Event title"),
+            "start":       types.Schema(type="STRING", description="Start time (natural language OK)"),
+            "end":         types.Schema(type="STRING", description="End time (optional; defaults to start + 1h)"),
+            "description": types.Schema(type="STRING", description="Optional event description / notes"),
+            "location":    types.Schema(type="STRING", description="Optional physical location or meeting link"),
+            "attendees":   types.Schema(type="STRING", description="Optional comma-separated attendee emails"),
+        },
+        required=["summary", "start"],
     ),
 )
 
@@ -514,6 +575,9 @@ FS_TOOL = types.Tool(function_declarations=[
     _gmail_draft_new_decl,
     _gmail_draft_reply_decl,
     _gmail_send_draft_decl,
+    _cal_today_decl,
+    _cal_upcoming_decl,
+    _cal_create_decl,
 ])
 
 ALL_TOOLS = [FS_TOOL]
@@ -522,7 +586,11 @@ ALL_TOOLS = [FS_TOOL]
 # Tools that mutate the file system — the agent loop must confirm with the
 # user before executing these. Keep this set narrow; adding a name here is a
 # statement that the operation is destructive and non-recoverable.
-DESTRUCTIVE_TOOLS = {"write_file", "gmail_draft_new", "gmail_draft_reply", "gmail_send_draft"}
+DESTRUCTIVE_TOOLS = {
+    "write_file",
+    "gmail_draft_new", "gmail_draft_reply", "gmail_send_draft",
+    "calendar_create_event",
+}
 
 # Tools that require typing an explicit uppercase confirmation word (not just 'y').
 # Reserved for actions that leave the machine and can't be undone: emails to third
@@ -591,6 +659,28 @@ def preview_action(name: str, args: dict) -> str:
             f"  body:    |\n"
             f"    {body_preview.replace(chr(10), chr(10) + '    ')}"
         )
+
+    if name == "calendar_create_event":
+        summary = args.get("summary", "?")
+        start = args.get("start", "?")
+        end = args.get("end", "(default +1h)")
+        location = args.get("location", "")
+        attendees = args.get("attendees", "")
+        description = args.get("description", "")
+        lines = [
+            f"  action:  create calendar event (invites will be sent to any attendees)",
+            f"  title:   {summary}",
+            f"  start:   {start}",
+            f"  end:     {end}",
+        ]
+        if location:
+            lines.append(f"  loc:     {location}")
+        if attendees:
+            lines.append(f"  invite:  {attendees}")
+        if description:
+            preview_desc = description[:200] + ("..." if len(description) > 200 else "")
+            lines.append(f"  notes:   {preview_desc}")
+        return "\n".join(lines)
 
     if name == "gmail_send_draft":
         draft_id = args.get("draft_id", "?")
@@ -695,6 +785,10 @@ TOOL_DISPATCH = {
     "gmail_draft_new":   _wrap(lambda to, subject, body, cc="": gmail_draft_new(to, subject, body, cc)),
     "gmail_draft_reply": _wrap(lambda email_id, body: gmail_draft_reply(email_id, body)),
     "gmail_send_draft":  _wrap(lambda draft_id: gmail_send_draft(draft_id)),
+    "calendar_list_today":    _wrap(lambda: cal_list_today()),
+    "calendar_list_upcoming": _wrap(lambda days=7: cal_list_upcoming(days)),
+    "calendar_create_event":  _wrap(lambda summary, start, end="", description="", location="", attendees="":
+                                    cal_create_event(summary, start, end, description, location, attendees)),
 }
 
 

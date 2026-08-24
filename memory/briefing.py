@@ -65,6 +65,27 @@ def _reminder_lines() -> list[str]:
     return lines
 
 
+def _calendar_lines() -> list[str]:
+    """Best-effort today's calendar. Silent if Calendar isn't set up."""
+    try:
+        from tools.calendar import list_today
+    except Exception:
+        return []
+
+    result = list_today()
+    if result.startswith("Error:"):
+        return []
+    if result.startswith("Today's calendar is clear"):
+        return ["📅 Calendar: nothing scheduled today"]
+
+    # list_today already returns a nicely formatted multi-line block
+    # Convert leading "Today (...) — N event(s):" into our emoji-prefixed version
+    lines = result.split("\n")
+    header = lines[0]
+    body_lines = lines[1:]
+    return [f"📅 {header}"] + body_lines
+
+
 def _email_lines() -> list[str]:
     """Best-effort unread email count. Silent if Gmail isn't set up."""
     try:
@@ -137,6 +158,10 @@ def compose(semantic: SemanticMemory) -> str:
     parts = [_greeting_line(semantic), ""]
 
     parts.extend(_reminder_lines())
+
+    cal = _calendar_lines()
+    if cal:
+        parts.extend(cal)
 
     email = _email_lines()
     if email:
