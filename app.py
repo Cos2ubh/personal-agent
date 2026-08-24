@@ -277,6 +277,7 @@ def _resolve_approval(approved: bool):
 
     tc_name = pending["tc_name"]
     tc_args = pending["tc_args"]
+    tc_id   = pending.get("tc_id", "")
 
     if approved:
         result = execute_tool(tc_name, tc_args)
@@ -293,7 +294,12 @@ def _resolve_approval(approved: bool):
             "content": f"**{tc_name}** declined by user.",
         })
 
-    st.session_state.history.append({"role": "tool", "name": tc_name, "content": result})
+    st.session_state.history.append({
+        "role": "tool",
+        "name": tc_name,
+        "id":   tc_id,
+        "content": result,
+    })
     st.session_state.pending_approval = None
 
     _run_loop()
@@ -322,14 +328,20 @@ def _run_loop():
 
         if response.tool_calls:
             for tc in response.tool_calls:
-                ss.history.append({"role": "tool_call", "name": tc.name, "args": tc.args})
+                ss.history.append({
+                    "role": "tool_call",
+                    "name": tc.name,
+                    "args": tc.args,
+                    "id": tc.id,
+                })
 
                 if tc.name in DESTRUCTIVE_TOOLS:
                     # Pause here — user must approve before we proceed
                     ss.pending_approval = {
                         "tc_name": tc.name,
                         "tc_args": dict(tc.args),
-                        "hard": tc.name in HARD_APPROVAL_TOOLS,
+                        "tc_id":   tc.id,
+                        "hard":    tc.name in HARD_APPROVAL_TOOLS,
                     }
                     return
 
@@ -348,7 +360,12 @@ def _run_loop():
                             "role": "image_gallery",
                             "images": paths,
                         })
-                ss.history.append({"role": "tool", "name": tc.name, "content": result})
+                ss.history.append({
+                    "role": "tool",
+                    "name": tc.name,
+                    "id":   tc.id,
+                    "content": result,
+                })
             continue  # loop back to call_llm with new tool results
 
         # Final answer

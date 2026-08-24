@@ -1,26 +1,30 @@
-"""Quick sanity check: does our API key work?"""
+"""Quick sanity check: does the Anthropic API key work?"""
 import os
 from dotenv import load_dotenv
-from google import genai
+from anthropic import Anthropic
 
 load_dotenv()
-api_key = os.getenv("GEMINI_API_KEY")
+api_key = os.getenv("ANTHROPIC_API_KEY")
 
 if not api_key:
-    print("ERROR: GEMINI_API_KEY not found in .env file")
-    exit(1)
+    print("ERROR: ANTHROPIC_API_KEY not found in .env file")
+    raise SystemExit(1)
 
-print(f"Key loaded, length: {len(api_key)} chars, starts with: {api_key[:6]}...")
-print("Sending a test message to Gemini...\n")
+print(f"Key loaded, length: {len(api_key)} chars, starts with: {api_key[:8]}...")
+print("Sending a test message to Claude...\n")
 
 try:
-    client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents="Reply with exactly this sentence: Hello, your key works."
+    client = Anthropic()   # reads ANTHROPIC_API_KEY from env
+    response = client.messages.create(
+        model=os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6"),
+        max_tokens=64,
+        messages=[{
+            "role": "user",
+            "content": "Reply with exactly this sentence: Hello, your key works.",
+        }],
     )
-    print("SUCCESS! Gemini replied:")
-    print(response.text)
+    print("SUCCESS! Claude replied:")
+    print(response.content[0].text)
 except Exception as e:
     print("FAILED — here's the error:")
     print(f"{type(e).__name__}: {e}")

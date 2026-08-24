@@ -266,11 +266,13 @@ def run_agentic_turn(user_input: str, history: list[dict], system: str) -> str:
         if response.tool_calls:
             for tc in response.tool_calls:
                 print(f"  [tool: {tc.name}({', '.join(f'{k}={v!r}' for k, v in tc.args.items())})]")
-                # Record the model's intent to call the tool
+                # Record the model's intent to call the tool.
+                # id is carried through so the matching tool_result block can be paired.
                 history.append({
                     "role": "tool_call",
                     "name": tc.name,
                     "args": tc.args,
+                    "id": tc.id,
                 })
 
                 # Destructive tools need explicit user approval before running.
@@ -301,7 +303,7 @@ def run_agentic_turn(user_input: str, history: list[dict], system: str) -> str:
                         result = f"User declined the {tc.name} operation. Do not retry unless the user changes their mind."
                         print(f"  [declined by user]")
                         record_declined(tc.name, tc.args)
-                        history.append({"role": "tool", "name": tc.name, "content": result})
+                        history.append({"role": "tool", "name": tc.name, "id": tc.id, "content": result})
                         continue
 
                 # Execute and record the result
@@ -311,6 +313,7 @@ def run_agentic_turn(user_input: str, history: list[dict], system: str) -> str:
                 history.append({
                     "role": "tool",
                     "name": tc.name,
+                    "id": tc.id,
                     "content": result,
                 })
             continue  # loop: let the model see tool results
