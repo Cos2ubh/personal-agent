@@ -15,6 +15,7 @@ from google.genai import types
 from tools.filesystem import read_file, list_dir, write_file, find_files, PermissionDenied
 from tools.doc_extract import extract_text as doc_extract_text
 from memory.doc_index import search_documents, format_search_results
+from memory.image_index import search_images, format_search_results as format_image_results
 from memory.reminders import Reminders, parse_time, format_due
 from memory.briefing import compose as compose_briefing
 from memory.semantic import SemanticMemory
@@ -375,6 +376,36 @@ _morning_briefing_decl = types.FunctionDeclaration(
 )
 
 
+_search_images_decl = types.FunctionDeclaration(
+    name="search_images_by_description",
+    description=(
+        "Semantic search over the user's INDEXED photos and screenshots using "
+        "natural-language visual descriptions. Use when the user asks to "
+        "find images by what they look like — 'find my sunset photos', "
+        "'photos with dogs', 'screenshots of code', 'my graduation pictures'. "
+        "Requires /index-images to have been run at least once. If a search "
+        "returns nothing, suggest they run /index-images or try find_files "
+        "for a filename-based search. Note: this matches visual CONTENT, not "
+        "identity — 'photos of person X' won't reliably work unless X has a "
+        "very distinctive appearance."
+    ),
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "query": types.Schema(
+                type="STRING",
+                description="Natural-language description of what the image should show",
+            ),
+            "n": types.Schema(
+                type="INTEGER",
+                description="Max results (1–20, default 5)",
+            ),
+        },
+        required=["query"],
+    ),
+)
+
+
 _set_reminder_decl = types.FunctionDeclaration(
     name="set_reminder",
     description=(
@@ -561,6 +592,7 @@ FS_TOOL = types.Tool(function_declarations=[
     _find_files_decl,
     _extract_text_decl,
     _search_docs_decl,
+    _search_images_decl,
     _set_reminder_decl,
     _list_reminders_decl,
     _complete_reminder_decl,
@@ -771,6 +803,7 @@ TOOL_DISPATCH = {
     "find_files":        _wrap(lambda pattern, extension="", path_hint="": "\n".join(find_files(pattern, extension, path_hint))),
     "extract_text":      _wrap(lambda path: doc_extract_text(path)),
     "search_documents_by_content": _wrap(lambda query, n=5: format_search_results(query, search_documents(query, n))),
+    "search_images_by_description": _wrap(lambda query, n=5: format_image_results(query, search_images(query, n))),
     "set_reminder":      _wrap(lambda text, when: _set_reminder_impl(text, when)),
     "list_reminders":    _wrap(lambda include_completed=False: _list_reminders_impl(include_completed)),
     "complete_reminder": _wrap(lambda reminder_id: _complete_reminder_impl(reminder_id)),
