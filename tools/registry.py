@@ -15,6 +15,7 @@ from google.genai import types
 from tools.filesystem import read_file, list_dir, write_file, find_files, PermissionDenied
 from tools.doc_extract import extract_text as doc_extract_text
 from memory.doc_index import search_documents, format_search_results
+from memory.reminders import Reminders, parse_time, format_due
 from tools.web import fetch as web_fetch, search as web_search
 from tools.gmail import (
     list_recent as gmail_list_recent,
@@ -297,6 +298,92 @@ _web_search_decl = types.FunctionDeclaration(
 )
 
 
+_set_reminder_decl = types.FunctionDeclaration(
+    name="set_reminder",
+    description=(
+        "Save a reminder with a due time. Use when the user says 'remind me "
+        "to X at Y' or similar. Accepts natural-language time strings: "
+        "'tomorrow 6pm', 'next Thursday', 'in 2 hours', 'July 15 at 9am', "
+        "'Monday morning'. Store the WHY of the reminder in text (what the "
+        "user needs to do), not just filler. Returns the new reminder's ID."
+    ),
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "text": types.Schema(
+                type="STRING",
+                description="What to remind the user about (e.g. 'call HR about offer')",
+            ),
+            "when": types.Schema(
+                type="STRING",
+                description="Natural-language time expression",
+            ),
+        },
+        required=["text", "when"],
+    ),
+)
+
+
+_list_reminders_decl = types.FunctionDeclaration(
+    name="list_reminders",
+    description=(
+        "List the user's active reminders sorted by due time. Set "
+        "include_completed=true to also see reminders already marked done. "
+        "Each entry has an ID that can be passed to complete_reminder or "
+        "delete_reminder."
+    ),
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "include_completed": types.Schema(
+                type="BOOLEAN",
+                description="Include already-completed reminders in the output. Default false.",
+            ),
+        },
+    ),
+)
+
+
+_complete_reminder_decl = types.FunctionDeclaration(
+    name="complete_reminder",
+    description=(
+        "Mark a reminder as done. Use when the user says 'I did X', 'that's "
+        "handled', or explicitly asks to check something off. Preserves the "
+        "record for history — use delete_reminder if the user wants it gone."
+    ),
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "reminder_id": types.Schema(
+                type="INTEGER",
+                description="ID from list_reminders",
+            ),
+        },
+        required=["reminder_id"],
+    ),
+)
+
+
+_delete_reminder_decl = types.FunctionDeclaration(
+    name="delete_reminder",
+    description=(
+        "Permanently delete a reminder. Use only when the user explicitly "
+        "asks to remove it (not just mark done — that's complete_reminder). "
+        "This is not reversible."
+    ),
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "reminder_id": types.Schema(
+                type="INTEGER",
+                description="ID from list_reminders",
+            ),
+        },
+        required=["reminder_id"],
+    ),
+)
+
+
 _search_docs_decl = types.FunctionDeclaration(
     name="search_documents_by_content",
     description=(
@@ -397,6 +484,10 @@ FS_TOOL = types.Tool(function_declarations=[
     _find_files_decl,
     _extract_text_decl,
     _search_docs_decl,
+    _set_reminder_decl,
+    _list_reminders_decl,
+    _complete_reminder_decl,
+    _delete_reminder_decl,
     _list_allowed_paths_decl,
     _web_fetch_decl,
     _web_search_decl,
@@ -520,6 +611,40 @@ def _wrap(fn):
     return inner
 
 
+_reminders = Reminders()
+
+
+def _set_reminder_impl(text: str, when: str) -> str:
+    due_iso = parse_time(when)
+    if not due_iso:
+        return f"Error: could not parse time '{when}'. Try 'tomorrow 6pm', 'next Thursday', 'in 2 hours', etc."
+    rid = _reminders.add(text=text.strip(), due_at_iso=due_iso)
+    return f"Reminder #{rid} saved: '{text}' due {format_due(due_iso)}"
+
+
+def _list_reminders_impl(include_completed: bool = False) -> str:
+    items = _reminders.list_all(include_completed=include_completed)
+    if not items:
+        return "No reminders." if not include_completed else "No reminders (nothing pending or completed)."
+    lines = []
+    for r in items:
+        marker = "✓" if r["completed_at"] else " "
+        lines.append(f"  [{marker}] #{r['id']}  {format_due(r['due_at'])}  —  {r['text']}")
+    return "\n".join(lines)
+
+
+def _complete_reminder_impl(reminder_id: int) -> str:
+    if _reminders.complete(int(reminder_id)):
+        return f"Reminder #{reminder_id} marked done."
+    return f"Reminder #{reminder_id} not found or already completed."
+
+
+def _delete_reminder_impl(reminder_id: int) -> str:
+    if _reminders.delete(int(reminder_id)):
+        return f"Reminder #{reminder_id} deleted."
+    return f"Reminder #{reminder_id} not found."
+
+
 def _list_allowed_paths_impl():
     read = get_read_paths()
     write = get_write_paths()
@@ -539,6 +664,10 @@ TOOL_DISPATCH = {
     "find_files":        _wrap(lambda pattern, extension="", path_hint="": "\n".join(find_files(pattern, extension, path_hint))),
     "extract_text":      _wrap(lambda path: doc_extract_text(path)),
     "search_documents_by_content": _wrap(lambda query, n=5: format_search_results(query, search_documents(query, n))),
+    "set_reminder":      _wrap(lambda text, when: _set_reminder_impl(text, when)),
+    "list_reminders":    _wrap(lambda include_completed=False: _list_reminders_impl(include_completed)),
+    "complete_reminder": _wrap(lambda reminder_id: _complete_reminder_impl(reminder_id)),
+    "delete_reminder":   _wrap(lambda reminder_id: _delete_reminder_impl(reminder_id)),
     "list_allowed_paths": _wrap(lambda: _list_allowed_paths_impl()),
     "web_fetch":         _wrap(lambda url: web_fetch(url)),
     "web_search":        _wrap(lambda query, max_results=5: web_search(query, max_results)),
