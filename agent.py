@@ -13,6 +13,7 @@ Special commands (type during chat):
   /gmail-status           — check whether Gmail is authenticated
   /index-docs             — build/refresh semantic index of PDFs/DOCX/text in read scope
   /reminders              — list all pending reminders
+  /briefing               — daily summary: reminders, unread email, weather
   /help                   — show this command list
   /quit  or  quit         — exit
 """
@@ -174,6 +175,13 @@ def handle_command(raw: str, semantic: SemanticMemory) -> bool:
             print(f"  {len(items)} active reminder(s):")
             for r in items:
                 print(f"    #{r['id']}  {format_due(r['due_at'])}  —  {r['text']}")
+        return True
+
+    if cmd == "/briefing":
+        from memory.briefing import compose as compose_briefing
+        print()
+        print(compose_briefing(semantic))
+        print()
         return True
 
     if cmd == "/index-docs":

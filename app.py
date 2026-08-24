@@ -21,6 +21,7 @@ from memory.semantic import SemanticMemory
 from memory.episodic import EpisodicMemory
 from memory.extractor import extract_facts
 from memory.reminders import Reminders, format_due
+from memory.briefing import compose as compose_briefing
 from tools.registry import (
     ALL_TOOLS, execute_tool, DESTRUCTIVE_TOOLS, HARD_APPROVAL_TOOLS,
     HARD_APPROVAL_WORD, preview_action, record_declined,
@@ -112,6 +113,14 @@ def render_sidebar():
             st.text(format_tail(15))
 
         st.divider()
+        if st.button("☀️  Briefing", use_container_width=True):
+            briefing_text = compose_briefing(st.session_state.semantic)
+            st.session_state.display_messages.append({
+                "role": "assistant",
+                "content": briefing_text,
+            })
+            st.rerun()
+
         if st.button("🗑️  Clear conversation", use_container_width=True):
             st.session_state.display_messages = []
             st.session_state.history = []

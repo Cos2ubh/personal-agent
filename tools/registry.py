@@ -16,6 +16,8 @@ from tools.filesystem import read_file, list_dir, write_file, find_files, Permis
 from tools.doc_extract import extract_text as doc_extract_text
 from memory.doc_index import search_documents, format_search_results
 from memory.reminders import Reminders, parse_time, format_due
+from memory.briefing import compose as compose_briefing
+from memory.semantic import SemanticMemory
 from tools.web import fetch as web_fetch, search as web_search
 from tools.gmail import (
     list_recent as gmail_list_recent,
@@ -298,6 +300,20 @@ _web_search_decl = types.FunctionDeclaration(
 )
 
 
+_morning_briefing_decl = types.FunctionDeclaration(
+    name="morning_briefing",
+    description=(
+        "Produce a concise daily briefing pulling from local sources: "
+        "overdue and today's reminders, unread email count (if Gmail is "
+        "authenticated), and weather for the user's home city (if that "
+        "fact is stored and Tavily web search is configured). Use when "
+        "the user asks 'what's on my plate today', 'give me the briefing', "
+        "'catch me up', or first thing in the morning."
+    ),
+    parameters=types.Schema(type="OBJECT", properties={}),
+)
+
+
 _set_reminder_decl = types.FunctionDeclaration(
     name="set_reminder",
     description=(
@@ -488,6 +504,7 @@ FS_TOOL = types.Tool(function_declarations=[
     _list_reminders_decl,
     _complete_reminder_decl,
     _delete_reminder_decl,
+    _morning_briefing_decl,
     _list_allowed_paths_decl,
     _web_fetch_decl,
     _web_search_decl,
@@ -668,6 +685,7 @@ TOOL_DISPATCH = {
     "list_reminders":    _wrap(lambda include_completed=False: _list_reminders_impl(include_completed)),
     "complete_reminder": _wrap(lambda reminder_id: _complete_reminder_impl(reminder_id)),
     "delete_reminder":   _wrap(lambda reminder_id: _delete_reminder_impl(reminder_id)),
+    "morning_briefing":  _wrap(lambda: compose_briefing(SemanticMemory())),
     "list_allowed_paths": _wrap(lambda: _list_allowed_paths_impl()),
     "web_fetch":         _wrap(lambda url: web_fetch(url)),
     "web_search":        _wrap(lambda query, max_results=5: web_search(query, max_results)),
