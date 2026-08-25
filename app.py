@@ -24,7 +24,7 @@ from config import (
     fs_permissions_configured, setup_fs_permissions,
     get_read_paths, get_write_paths,
 )
-from llm import call_llm
+from llm import call_llm, set_forced_model, get_forced_model, SONNET, OPUS, HAIKU
 from memory.semantic import SemanticMemory
 from memory.episodic import EpisodicMemory
 from memory.extractor import extract_facts
@@ -169,6 +169,23 @@ def render_sidebar():
             st.text(format_tail(15))
 
         st.divider()
+
+        # Model picker — auto-routes by default; user can lock a specific model.
+        model_choice = st.selectbox(
+            "🧠 Model",
+            options=("Auto", "Sonnet", "Opus", "Haiku"),
+            index=("Auto", "Sonnet", "Opus", "Haiku").index(
+                st.session_state.get("model_choice", "Auto")
+            ),
+            help=(
+                "Auto = Sonnet for simple prompts, Opus for complex ones. "
+                "Pick a specific model to lock it for this session."
+            ),
+        )
+        if model_choice != st.session_state.get("model_choice"):
+            st.session_state.model_choice = model_choice
+            set_forced_model(None if model_choice == "Auto" else model_choice.lower())
+
         if st.button("☀️  Briefing", use_container_width=True):
             briefing_text = compose_briefing(st.session_state.semantic)
             st.session_state.display_messages.append({
@@ -196,6 +213,9 @@ def render_chat_history():
         else:
             with st.chat_message(role):
                 st.markdown(msg["content"])
+                model = msg.get("model", "")
+                if model and role == "assistant":
+                    st.caption(f"— via {model.replace('claude-', '')}")
 
 
 def _render_image_gallery(paths: list[str], msg_idx: int):
@@ -371,7 +391,11 @@ def _run_loop():
         # Final answer
         final_text = response.text or "(agent returned no text)"
         ss.history.append({"role": "model", "content": final_text})
-        ss.display_messages.append({"role": "assistant", "content": final_text})
+        ss.display_messages.append({
+            "role": "assistant",
+            "content": final_text,
+            "model": response.model,
+        })
         _finish_turn(reply_text=final_text)
         return
 

@@ -16,13 +16,15 @@ Special commands (type during chat):
   /index-faces            — build/refresh face-recognition index (detects + embeds faces per image)
   /reminders              — list all pending reminders
   /briefing               — daily summary: reminders, unread email, weather
+  /model [auto|sonnet|opus|haiku]  — pick which Claude model handles turns
   /help                   — show this command list
   /quit  or  quit         — exit
 """
 
+import os
 from pathlib import Path
 from config import fs_permissions_configured, setup_fs_permissions, get_read_paths, get_write_paths
-from llm import call_llm
+from llm import call_llm, set_forced_model, get_forced_model, SONNET, OPUS, HAIKU
 from memory.semantic import SemanticMemory
 from memory.episodic import EpisodicMemory
 from memory.extractor import extract_facts
@@ -186,6 +188,29 @@ def handle_command(raw: str, semantic: SemanticMemory) -> bool:
         print()
         return True
 
+    if cmd == "/model" or cmd.startswith("/model "):
+        arg = cmd[len("/model"):].strip().lower()
+        if not arg:
+            # Show current effective mode
+            forced = get_forced_model()
+            env_lock = os.getenv("CLAUDE_MODEL", "").strip()
+            if env_lock and env_lock.lower() != "auto":
+                print(f"  Model: {env_lock}  (locked via CLAUDE_MODEL in .env)")
+            elif forced:
+                print(f"  Model: {forced}  (session override — /model auto to unset)")
+            else:
+                print(f"  Model: auto-routing (Sonnet cheap default, Opus for complex prompts)")
+            return True
+        if arg in ("auto", "off", "unset"):
+            set_forced_model(None)
+            print("  Model: auto-routing")
+        elif arg in ("sonnet", "opus", "haiku") or arg.startswith("claude-"):
+            resolved = set_forced_model(arg)
+            print(f"  Model: {resolved}  (session override — /model auto to unset)")
+        else:
+            print(f"  Unknown model '{arg}'. Try: /model auto | sonnet | opus | haiku")
+        return True
+
     if cmd == "/index-docs":
         from memory.doc_index import index_all
 
@@ -321,12 +346,12 @@ def run_agentic_turn(user_input: str, history: list[dict], system: str) -> str:
         # No tool calls — final answer
         final_text = response.text or "(agent returned no text)"
         history.append({"role": "model", "content": final_text})
-        return final_text
+        return final_text, response.model
 
     # Hit the iteration cap
     msg = f"(agent exceeded {MAX_TOOL_ITERATIONS} tool-call iterations — stopping)"
     history.append({"role": "model", "content": msg})
-    return msg
+    return msg, ""
 
 
 def _surface_due_reminders():
@@ -376,7 +401,7 @@ def main():
         system = build_system_prompt(user_input, semantic, episodic)
 
         try:
-            reply = run_agentic_turn(user_input, history, system)
+            reply, reply_model = run_agentic_turn(user_input, history, system)
         except Exception as e:
             print(f"  [LLM error: {e}]")
             # Roll back the incomplete turn so history stays consistent
@@ -384,7 +409,8 @@ def main():
                 history.pop()
             continue
 
-        print(f"\nAgent: {reply}\n")
+        model_tag = f"  [via {reply_model.replace('claude-', '')}]" if reply_model else ""
+        print(f"\nAgent:{model_tag} {reply}\n")
 
         # Persist to episodic memory (only the user text + final agent reply)
         episodic.save_turn(user_input, reply)
