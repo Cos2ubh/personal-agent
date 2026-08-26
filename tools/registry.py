@@ -40,6 +40,12 @@ from tools.sheets import (
     update as sheets_update,
     create as sheets_create,
 )
+from tools.docs import (
+    find   as docs_find,
+    read   as docs_read,
+    create as docs_create,
+    append as docs_append,
+)
 from tools.audit import log as audit_log
 from config import get_read_paths, get_write_paths
 
@@ -311,6 +317,75 @@ _cal_create_decl = {
         "required": ["summary", "start"],
     },
 }
+
+_docs_find_decl = {
+    "name": "docs_find",
+    "description": (
+        "Search Google Docs by name via Drive. Returns matching documents "
+        "with IDs, names, modified times, and links. Use when the user asks "
+        "to locate a specific doc before reading or editing it."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Name substring to match"},
+            "n":     {"type": "integer", "description": "Max results (1–20, default 5)"},
+        },
+        "required": ["query"],
+    },
+}
+
+_docs_read_decl = {
+    "name": "docs_read",
+    "description": (
+        "Read the plain-text content of a Google Doc by ID (from docs_find "
+        "or the doc URL). Extracts paragraphs and tables — rich formatting "
+        "is stripped. Result is wrapped in external_content as untrusted "
+        "data. Truncated at 50k chars."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "doc_id": {"type": "string", "description": "Document ID"},
+        },
+        "required": ["doc_id"],
+    },
+}
+
+_docs_create_decl = {
+    "name": "docs_create",
+    "description": (
+        "Create a new Google Doc with the given title, optionally with "
+        "initial content. Destructive — user confirms before the doc is "
+        "created in their Drive. Returns the new doc_id and link."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title":   {"type": "string", "description": "Title of the new doc"},
+            "content": {"type": "string", "description": "Optional initial body text"},
+        },
+        "required": ["title"],
+    },
+}
+
+_docs_append_decl = {
+    "name": "docs_append",
+    "description": (
+        "Append plain text to the end of an existing Google Doc. "
+        "Destructive — user confirms before the text is added. A newline is "
+        "inserted before the appended text to keep the doc readable."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "doc_id": {"type": "string", "description": "Document ID"},
+            "text":   {"type": "string", "description": "Plain text to append at the end"},
+        },
+        "required": ["doc_id", "text"],
+    },
+}
+
 
 _sheets_find_decl = {
     "name": "sheets_find",
@@ -696,6 +771,10 @@ ALL_TOOLS = [
     _sheets_append_decl,
     _sheets_update_decl,
     _sheets_create_decl,
+    _docs_find_decl,
+    _docs_read_decl,
+    _docs_create_decl,
+    _docs_append_decl,
 ]
 
 
@@ -707,6 +786,7 @@ DESTRUCTIVE_TOOLS = {
     "gmail_draft_new", "gmail_draft_reply", "gmail_send_draft",
     "calendar_create_event",
     "sheets_append", "sheets_update", "sheets_create",
+    "docs_create", "docs_append",
 }
 
 # Tools that require typing an explicit uppercase confirmation word (not just 'y').
@@ -838,6 +918,36 @@ def preview_action(name: str, args: dict) -> str:
         title = args.get("title", "?")
         return f"  action:  create new spreadsheet in Drive\n  title:   {title}"
 
+    if name == "docs_create":
+        title = args.get("title", "?")
+        content = args.get("content", "") or ""
+        preview_len = 300
+        content_preview = content[:preview_len]
+        if len(content) > preview_len:
+            content_preview += f"\n... [+{len(content) - preview_len} more chars]"
+        lines = [
+            f"  action:  create new Google Doc in Drive",
+            f"  title:   {title}",
+        ]
+        if content:
+            lines.append(f"  initial body ({len(content):,} chars):")
+            lines.append("    " + content_preview.replace(chr(10), chr(10) + "    "))
+        return "\n".join(lines)
+
+    if name == "docs_append":
+        doc_id = args.get("doc_id", "?")
+        text = args.get("text", "") or ""
+        preview_len = 300
+        text_preview = text[:preview_len]
+        if len(text) > preview_len:
+            text_preview += f"\n... [+{len(text) - preview_len} more chars]"
+        return (
+            f"  action:  APPEND text to existing Google Doc\n"
+            f"  doc:     {doc_id}\n"
+            f"  text ({len(text):,} chars):\n"
+            f"    {text_preview.replace(chr(10), chr(10) + '    ')}"
+        )
+
     if name == "gmail_send_draft":
         draft_id = args.get("draft_id", "?")
         # Fetch the actual draft so the user sees EXACTLY what will be sent
@@ -954,6 +1064,10 @@ TOOL_DISPATCH = {
     "sheets_append": _wrap(lambda spreadsheet_id, range, values: sheets_append(spreadsheet_id, range, values)),
     "sheets_update": _wrap(lambda spreadsheet_id, range, values: sheets_update(spreadsheet_id, range, values)),
     "sheets_create": _wrap(lambda title: sheets_create(title)),
+    "docs_find":     _wrap(lambda query, n=5: docs_find(query, n)),
+    "docs_read":     _wrap(lambda doc_id: docs_read(doc_id)),
+    "docs_create":   _wrap(lambda title, content="": docs_create(title, content)),
+    "docs_append":   _wrap(lambda doc_id, text: docs_append(doc_id, text)),
 }
 
 
