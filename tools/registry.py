@@ -18,7 +18,7 @@ from memory.face_index import register_face as face_register, list_registered as
 from memory.reminders import Reminders, parse_time, format_due
 from memory.briefing import compose as compose_briefing
 from memory.semantic import SemanticMemory
-from tools.web import fetch as web_fetch, search as web_search
+from tools.web import fetch as web_fetch, search as web_search, open_url as web_open_url
 from tools.gmail import (
     list_recent as gmail_list_recent,
     read_email as gmail_read_email,
@@ -490,6 +490,32 @@ _sheets_create_decl = {
 }
 
 
+_open_url_decl = {
+    "name": "open_url",
+    "description": (
+        "Open a URL in the user's default browser so they can complete an "
+        "action that needs a human — booking a ticket, paying, signing in, "
+        "picking a seat, entering an OTP. Use after presenting options to "
+        "the user and getting a choice: 'I'll book the 8pm show at PVR "
+        "Priya' -> open_url on the exact BookMyShow deep link. Common "
+        "sites: bookmyshow.com, makemytrip.com, irctc.co.in, cleartrip.com, "
+        "redbus.in, ticketmaster.com. Destructive-observable — user "
+        "approves the exact URL first. If you also want a Calendar entry "
+        "for the event, chain with calendar_create_event separately."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "Full URL starting with http:// or https://",
+            },
+        },
+        "required": ["url"],
+    },
+}
+
+
 _web_fetch_decl = {
     "name": "web_fetch",
     "description": (
@@ -757,6 +783,7 @@ ALL_TOOLS = [
     _list_allowed_paths_decl,
     _web_fetch_decl,
     _web_search_decl,
+    _open_url_decl,
     _gmail_list_decl,
     _gmail_read_decl,
     _gmail_search_decl,
@@ -787,6 +814,7 @@ DESTRUCTIVE_TOOLS = {
     "calendar_create_event",
     "sheets_append", "sheets_update", "sheets_create",
     "docs_create", "docs_append",
+    "open_url",
 }
 
 # Tools that require typing an explicit uppercase confirmation word (not just 'y').
@@ -934,6 +962,20 @@ def preview_action(name: str, args: dict) -> str:
             lines.append("    " + content_preview.replace(chr(10), chr(10) + "    "))
         return "\n".join(lines)
 
+    if name == "open_url":
+        url = args.get("url", "?")
+        # Extract domain for at-a-glance verification
+        try:
+            from urllib.parse import urlparse
+            domain = urlparse(url).netloc or "?"
+        except Exception:
+            domain = "?"
+        return (
+            f"  action:  OPEN URL in your default browser\n"
+            f"  domain:  {domain}\n"
+            f"  url:     {url}"
+        )
+
     if name == "docs_append":
         doc_id = args.get("doc_id", "?")
         text = args.get("text", "") or ""
@@ -1049,6 +1091,7 @@ TOOL_DISPATCH = {
     "list_allowed_paths": _wrap(lambda: _list_allowed_paths_impl()),
     "web_fetch":         _wrap(lambda url: web_fetch(url)),
     "web_search":        _wrap(lambda query, max_results=5: web_search(query, max_results)),
+    "open_url":          _wrap(lambda url: web_open_url(url)),
     "gmail_list_recent": _wrap(lambda n=10: gmail_list_recent(n)),
     "gmail_read_email":  _wrap(lambda email_id: gmail_read_email(email_id)),
     "gmail_search":      _wrap(lambda query, n=10: gmail_search(query, n)),

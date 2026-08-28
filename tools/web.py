@@ -10,6 +10,8 @@ handing it to the LLM — see sub-chunk 2 for the prompt-injection defense.
 """
 
 import os
+import webbrowser
+from urllib.parse import urlparse
 
 import httpx
 import trafilatura
@@ -172,3 +174,42 @@ def search(query: str, max_results: int = DEFAULT_SEARCH_RESULTS) -> str:
         lines.append("")
 
     return "\n".join(lines).rstrip()
+
+
+# ── Browser hand-off ─────────────────────────────────────────────────────
+
+def open_url(url: str) -> str:
+    """
+    Open a URL in the user's default browser. Used to hand the user off to
+    booking sites, checkout pages, video calls, or any page they need to
+    interact with themselves. Approval-gated in the agent loop.
+
+    Validates scheme (only http/https), rejects malformed URLs.
+    """
+    url = (url or "").strip()
+    if not url:
+        return "Error: url is empty."
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return (
+            f"Error: only http:// and https:// URLs are supported "
+            f"(got scheme {parsed.scheme!r})."
+        )
+    if not parsed.netloc:
+        return "Error: URL is missing a hostname."
+
+    try:
+        # new=2 tries to open in a new tab of the current browser window
+        opened = webbrowser.open(url, new=2)
+    except Exception as e:
+        return f"Error: could not launch browser — {type(e).__name__}: {e}"
+
+    if not opened:
+        return (
+            "Error: browser launch returned False. Is a default browser "
+            "configured on this machine?"
+        )
+
+    return f"Opened {url} in your default browser."
+
