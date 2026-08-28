@@ -36,7 +36,7 @@ from tools.registry import (
 )
 from tools.audit import format_tail
 
-MAX_TOOL_ITERATIONS = 6
+MAX_TOOL_ITERATIONS = 15   # matches agent.py — research chains need headroom, runaway loops still caught
 
 # Tools whose results contain image file paths we want to preview inline
 _IMAGE_RETURN_TOOLS = {"search_images_by_description", "find_photos_of"}

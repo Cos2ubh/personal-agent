@@ -35,7 +35,7 @@ from tools.registry import (
 )
 from tools.audit import format_tail as audit_tail
 
-MAX_TOOL_ITERATIONS = 6  # hard cap on tool-call chains per user turn
+MAX_TOOL_ITERATIONS = 15  # hard cap on tool-call chains per user turn — wide enough for research + ticket-booking chains, tight enough to catch runaway loops
 
 SYSTEM_BASE = """You are a personal AI assistant — a Chief of Staff for the user.
 You are installed locally on their machine. You remember facts about them and refer to
