@@ -606,12 +606,36 @@ def _dismiss_overlays(page):
     Best-effort dismissal of modals, promo popups, and ads that could block
     the form. Silent on failure — no reason to break the flow if there's
     nothing to close.
+
+    IRCTC specifically renders a 'Welcome to IRCTC' language-picker modal on
+    every fresh page load whose ui-dialog-mask intercepts ALL clicks
+    beneath it (this is what caused every earlier automation failure —
+    Playwright reported 'subtree intercepts pointer events'). Clicking the
+    'En' / 'English' button dismisses the modal and unblocks the page.
     """
+    # 1. IRCTC's welcome-language modal — most important, do first
+    for sel in (
+        "button:has-text('En')",
+        "button:has-text('English')",
+        ".ui-dialog button:has-text('En')",
+    ):
+        try:
+            btn = page.locator(sel).first
+            if btn.is_visible(timeout=800):
+                btn.click(timeout=2000)
+                page.wait_for_timeout(600)   # let the modal animate out
+                break
+        except Exception:
+            continue
+
+    # 2. Escape to close anything else lingering
     try:
         page.keyboard.press("Escape")
         page.wait_for_timeout(300)
     except Exception:
         pass
+
+    # 3. Common close-button selectors
     for sel in (
         ".ui-dialog-titlebar-close",
         ".modal-close",
@@ -626,3 +650,17 @@ def _dismiss_overlays(page):
                 page.wait_for_timeout(200)
         except Exception:
             continue
+
+    # 4. If any ui-dialog-mask is still visible, force-hide it via CSS.
+    #    This is a last-resort measure for stubborn overlays we couldn't
+    #    click through.
+    try:
+        page.evaluate(
+            """() => {
+                document.querySelectorAll(
+                    '.ui-dialog-mask, .ui-widget-overlay, .custom-blur-mask'
+                ).forEach(el => { el.style.display = 'none'; });
+            }"""
+        )
+    except Exception:
+        pass
