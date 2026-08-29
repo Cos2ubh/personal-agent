@@ -364,17 +364,61 @@ def search_irctc_train(
         )
 
     # ── Date field with retry ────────────────────────────────────────
+    # PrimeNG's p-calendar uses an overlay picker. Typing into the input
+    # doesn't reliably update the model — we have to open the calendar
+    # popup and click the specific day cell, navigating months if needed.
+    from datetime import datetime as _dt
+    target_date = _dt.strptime(date_input, "%d-%m-%Y").date()
+    target_month_header = target_date.strftime("%B %Y")   # e.g. "September 2026"
+    target_day_str = str(target_date.day)
+
     def _fill_date():
+        # 1. Click the input to open the calendar overlay
         field = page.locator("p-calendar input").first
         field.click(timeout=_STEP_TIMEOUT_MS)
-        field.fill(date_input)
-        page.keyboard.press("Escape")
+        page.wait_for_selector(".ui-datepicker", timeout=5000)
+
+        # 2. Navigate to the target month by clicking "next" until the header matches.
+        #    Cap at 24 months forward so we don't loop forever if navigation breaks.
+        for _ in range(24):
+            try:
+                current = page.locator(".ui-datepicker-title").first.text_content(timeout=1000) or ""
+            except Exception:
+                current = ""
+            if target_month_header in current:
+                break
+            try:
+                page.locator(".ui-datepicker-next").first.click(timeout=2000)
+                page.wait_for_timeout(200)
+            except Exception:
+                break
+
+        # 3. Click the day cell — filter to same-month cells only
+        #    (PrimeNG shows leading/trailing days from adjacent months in gray)
+        day_cell = page.locator(
+            ".ui-datepicker-calendar td:not(.ui-datepicker-other-month) a"
+        ).get_by_text(target_day_str, exact=True).first
+        day_cell.click(timeout=_STEP_TIMEOUT_MS)
+
+        # 4. Verify — read back the input value to confirm the pick landed
+        page.wait_for_timeout(400)
+        actual = field.input_value()
+        expected = target_date.strftime("%d/%m/%Y")
+        if actual != expected:
+            raise RuntimeError(
+                f"Date picker landed on '{actual}' but we wanted '{expected}'. "
+                f"Calendar navigation may have overshot the target month."
+            )
 
     try:
         _retry("set journey date", _fill_date)
     except Exception as e:
         note = _capture_error_screenshot("irctc_date")
-        return f"IRCTC search failed after {_STEP_RETRIES} attempts: {e}.{note}"
+        return (
+            f"IRCTC date picker failed after {_STEP_RETRIES} attempts: {e}."
+            f"{note} The calendar popup may have changed structure — send me "
+            f"the screenshot and I'll update the selectors."
+        )
 
     # ── Class dropdown (best-effort; search still runs on default) ───
     def _pick_class():
