@@ -515,15 +515,20 @@ _search_irctc_decl = {
     "name": "search_irctc_train",
     "description": (
         "Automate the IRCTC train search form — fills From, To, Date, Class "
-        "fields and clicks Search. Runs in the managed browser (see "
-        "browser_open) with your persistent IRCTC login session. If a CAPTCHA "
-        "appears, the browser stays open and you solve it there. Use when the "
-        "user wants to book a train and has told you the route + date + class. "
-        "IMPORTANT: this tool has internal retry logic (10 attempts per step). "
-        "Do NOT ask the user to say 'try again' after a failure — the tool "
-        "already retried. If the tool returns a final failure message, just "
-        "report it to the user with the diagnostic hint it provided (usually "
-        "'dismiss the popup / log in / check the screenshot') and stop."
+        "and clicks Search in the managed browser. After clicking Search, the "
+        "tool detects the actual outcome and returns one of four clear states: "
+        "(1) 'results loaded' — success, browser shows trains, tell the user "
+        "to pick one; (2) 'login required' — IRCTC's login modal appeared, "
+        "tell the user to log in in the browser then re-run this command; "
+        "(3) 'no results' — wrong date/station or genuinely no trains, "
+        "suggest a fix; (4) 'unclear state' — screenshot saved for debugging. "
+        "Internal retry logic runs 10 attempts per step; do NOT ask the user "
+        "to say 'try again' — just report the tool's outcome directly.\n\n"
+        "DATE HANDLING: pass a real future date. Accepts natural language "
+        "('tomorrow', 'next Tuesday', '2 September') or DD-MM-YYYY. If the "
+        "user says '2 September' without a year, ALWAYS use the current year "
+        "(check the system prompt's current date) — do not default to a "
+        "past year. Past dates are rejected by the tool."
     ),
     "input_schema": {
         "type": "object",
@@ -538,7 +543,11 @@ _search_irctc_decl = {
             },
             "journey_date": {
                 "type": "string",
-                "description": "Journey date in DD-MM-YYYY format",
+                "description": (
+                    "Journey date — use DD-MM-YYYY with the current year, or a "
+                    "natural phrase like 'tomorrow', 'next Tuesday', 'in 3 days'. "
+                    "Past dates rejected."
+                ),
             },
             "travel_class": {
                 "type": "string",

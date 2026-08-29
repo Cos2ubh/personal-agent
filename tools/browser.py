@@ -219,10 +219,69 @@ def _normalize_class(travel_class: str) -> str:
     return _CLASS_ALIASES.get(travel_class.strip().lower(), "SL")
 
 
-def _normalize_date(journey_date: str) -> str:
-    """Accept DD/MM/YYYY or DD-MM-YYYY, return DD-MM-YYYY (IRCTC's format)."""
-    d = (journey_date or "").strip().replace("/", "-")
-    return d
+def _normalize_date(journey_date: str) -> tuple[str | None, str | None]:
+    """
+    Parse a journey date. Accepts natural language ('tomorrow', '2 sep',
+    'next Tuesday') and structured strings (DD-MM-YYYY, DD/MM/YYYY,
+    YYYY-MM-DD).
+
+    Returns (formatted_date, None) on success — formatted as DD-MM-YYYY
+    which is what IRCTC's calendar field expects.
+    Returns (None, error_message) on failure (past date, unparseable).
+    """
+    from datetime import datetime, date
+
+    raw = (journey_date or "").strip()
+    if not raw:
+        return None, "journey_date is required."
+
+    parsed = None
+
+    # 1. Try unambiguous structured formats first (day-month-year, ISO).
+    #    Doing this before dateparser avoids DATE_ORDER guessing on strings
+    #    like '2026-09-02' which dateparser might otherwise misinterpret.
+    normalized = raw.replace("/", "-")
+    for fmt in ("%d-%m-%Y", "%Y-%m-%d", "%d-%m-%y"):
+        try:
+            parsed = datetime.strptime(normalized, fmt)
+            break
+        except ValueError:
+            continue
+
+    # 2. Fall back to dateparser for natural language ('tomorrow',
+    #    'next Tuesday', '2 September'). Prefer future dates so 'sep 2'
+    #    without a year resolves to the next occurrence, not the last one.
+    if parsed is None:
+        try:
+            import dateparser
+            parsed = dateparser.parse(
+                raw,
+                settings={
+                    "PREFER_DATES_FROM": "future",
+                    "STRICT_PARSING": False,
+                },
+            )
+        except Exception:
+            parsed = None
+
+    if parsed is None:
+        return None, (
+            f"could not parse journey_date '{raw}'. Use DD-MM-YYYY or a "
+            f"phrase like 'tomorrow' / 'next Tuesday' / '2 September'."
+        )
+
+    # Reject past dates — IRCTC silently accepts them and resets to today,
+    # so we'd hand off a broken form. Better to fail fast.
+    journey_d = parsed.date() if isinstance(parsed, datetime) else parsed
+    today = date.today()
+    if journey_d < today:
+        return None, (
+            f"journey_date '{raw}' parsed as {journey_d.strftime('%d-%m-%Y')} "
+            f"which is in the past. IRCTC won't accept it. Use current year "
+            f"(today is {today.strftime('%d-%m-%Y')}) or a future date."
+        )
+
+    return journey_d.strftime("%d-%m-%Y"), None
 
 
 def search_irctc_train(
@@ -244,13 +303,14 @@ def search_irctc_train(
     """
     from_input = (from_station or "").strip()
     to_input = (to_station or "").strip()
-    date_input = _normalize_date(journey_date)
     class_code = _normalize_class(travel_class)
 
     if not from_input or not to_input:
         return "Error: from_station and to_station are both required."
-    if not date_input:
-        return "Error: journey_date is required (format DD-MM-YYYY)."
+
+    date_input, date_err = _normalize_date(journey_date)
+    if date_err:
+        return f"Error: {date_err}"
 
     try:
         page = _ensure_browser()
@@ -346,16 +406,89 @@ def search_irctc_train(
             f"{e}.{note} Form is filled — click Search in the browser manually."
         )
 
-    # Let results render
+    # ── Post-click state detection ───────────────────────────────────
+    # After clicking Search, IRCTC does one of three things:
+    #   1. Renders a list of trains below the search form (success)
+    #   2. Pops up a login modal ("Please sign in to search")
+    #   3. Renders "No trains available" for the given route/date
+    # We race these three signals for up to 10 seconds and report back.
+
     try:
-        page.wait_for_timeout(3000)
+        page.wait_for_timeout(2000)  # give the UI a moment to react
     except Exception:
         pass
 
+    outcome = "unknown"
+    detected_msg = ""
+
+    # Poll for a signal — check the three states over ~10 seconds
+    for _ in range(10):
+        try:
+            # Signal A: results rendered
+            if page.locator("app-train-list, .train-list, .tbl-body, table.train-heading").first.is_visible(timeout=800):
+                outcome = "results"
+                break
+        except Exception:
+            pass
+        try:
+            # Signal B: login modal appeared (IRCTC uses different classes across flows)
+            login_modal = page.locator(
+                ".login-body, [aria-label*='Login'], .ui-dialog:has-text('LOGIN'), input[placeholder*='User Name']"
+            ).first
+            if login_modal.is_visible(timeout=800):
+                outcome = "login_required"
+                break
+        except Exception:
+            pass
+        try:
+            # Signal C: "No trains" or similar empty-state text
+            empty = page.locator(
+                "text=/no trains|no result|please enter valid/i"
+            ).first
+            if empty.is_visible(timeout=800):
+                outcome = "no_trains"
+                try:
+                    detected_msg = empty.text_content(timeout=500) or ""
+                except Exception:
+                    detected_msg = ""
+                break
+        except Exception:
+            pass
+        time.sleep(0.5)
+
+    if outcome == "results":
+        return (
+            f"IRCTC search executed: {from_input} → {to_input} on {date_input} "
+            f"({class_code}). Train results are loaded in the browser window. "
+            f"Pick a train there to continue booking."
+        )
+
+    if outcome == "login_required":
+        return (
+            f"IRCTC search reached the login gate: {from_input} → {to_input} on "
+            f"{date_input} ({class_code}). The form was filled and Search was "
+            f"clicked, but IRCTC's login modal is now open in the browser. "
+            f"Log in there (username + password + CAPTCHA), then re-run the "
+            f"same command — the session will persist so this login is a one-time step."
+        )
+
+    if outcome == "no_trains":
+        snippet = (detected_msg or "IRCTC returned no trains").strip()[:120]
+        return (
+            f"IRCTC returned no results for {from_input} → {to_input} on "
+            f"{date_input} ({class_code}). Message from IRCTC: '{snippet}'. "
+            f"Common causes: wrong date, unknown station code, or genuinely "
+            f"no trains on that route. Try a different date or verify the "
+            f"station names."
+        )
+
+    # Fell through the poll loop without a clear signal
+    note = _capture_error_screenshot("irctc_postsearch")
     return (
-        f"IRCTC search executed: {from_input} → {to_input} on {date_input} "
-        f"({class_code}). Results loaded in the browser window. "
-        f"Pick a train and continue booking there."
+        f"IRCTC search clicked but state after Search is unclear (no results "
+        f"table, no login modal, no error message detected within 10s). "
+        f"Check the browser window — it may have loaded slowly or IRCTC's "
+        f"result markup may have changed.{note}"
     )
 
 
