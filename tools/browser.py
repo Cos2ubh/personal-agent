@@ -31,7 +31,38 @@ is reused across all Playwright projects on this machine.
 """
 
 import atexit
+import time
 from pathlib import Path
+
+# Retry policy for flaky steps (overlays, network latency, autocomplete lag).
+# 10 attempts × ~5s each ≈ 50s worst-case per step before hard failure.
+# Enough headroom that transient blips retry silently, but capped so a truly
+# stuck operation (login modal open, DOM changed, IRCTC down) fails fast
+# enough to be actionable.
+_STEP_RETRIES = 10
+_STEP_RETRY_DELAY = 1.5     # seconds between attempts
+_STEP_TIMEOUT_MS = 4_000    # per-click timeout — short so 10 retries stay bounded
+
+
+def _retry(operation_name: str, fn, retries: int = _STEP_RETRIES,
+           delay: float = _STEP_RETRY_DELAY):
+    """
+    Retry a Playwright operation up to `retries` times with `delay` seconds
+    between attempts. Returns fn() on success, raises the last error on
+    persistent failure.
+    """
+    last_error = None
+    for attempt in range(retries):
+        try:
+            return fn()
+        except Exception as e:
+            last_error = e
+            if attempt < retries - 1:
+                time.sleep(delay)
+    raise RuntimeError(
+        f"{operation_name}: failed after {retries} attempts "
+        f"({type(last_error).__name__}: {last_error})"
+    )
 
 # Playwright is imported lazily so the module loads even if the browser
 # binary isn't installed yet (e.g. on a fresh clone before setup).
@@ -237,16 +268,25 @@ def search_irctc_train(
             f"{note} IRCTC may be down or slow — try again."
         )
 
-    # Helper: fill a PrimeNG autocomplete field by typing then clicking the
-    # first suggestion. IRCTC uses formcontrolname='origin' and 'destination'.
+    # Dismiss any lingering modal / promo popup before typing.
+    _dismiss_overlays(page)
+
+    # Helper: fill a PrimeNG autocomplete field. Wrapped in _retry so
+    # transient overlays or slow autocomplete network calls don't abort
+    # the whole flow on the first miss.
     def _fill_station(formcontrolname: str, value: str, label: str):
-        field = page.locator(f"p-autocomplete[formcontrolname='{formcontrolname}'] input").first
-        field.click()
-        field.fill("")   # clear any existing value
-        field.type(value, delay=50)  # simulate human typing
-        # Wait for the autocomplete panel and pick first match
-        page.wait_for_selector(".ui-autocomplete-items li", timeout=5000)
-        page.locator(".ui-autocomplete-items li").first.click()
+        def _do():
+            field = page.locator(
+                f"p-autocomplete[formcontrolname='{formcontrolname}'] input"
+            ).first
+            field.click(timeout=_STEP_TIMEOUT_MS)
+            field.fill("")
+            field.type(value, delay=50)
+            page.wait_for_selector(".ui-autocomplete-items li", timeout=5000)
+            page.locator(".ui-autocomplete-items li").first.click(
+                timeout=_STEP_TIMEOUT_MS
+            )
+        _retry(f"fill {label} station", _do)
 
     try:
         _fill_station("origin", from_input, "From")
@@ -254,49 +294,59 @@ def search_irctc_train(
     except Exception as e:
         note = _capture_error_screenshot("irctc_station")
         return (
-            f"Error filling station fields: {type(e).__name__}: {e}."
-            f"{note} IRCTC's autocomplete may have changed — solve the search "
-            f"manually in the open browser window."
+            f"IRCTC search failed after {_STEP_RETRIES} attempts: {e}.{note} "
+            f"Most common cause: a login modal or ad popup is covering the form. "
+            f"Look at the browser window — dismiss any popup, log in if the "
+            f"login modal is open (via ☰ menu → Login), then re-run the same "
+            f"command. If the form looks unobstructed but still fails, IRCTC's "
+            f"DOM may have changed — send me the screenshot at "
+            f"data/irctc_station_error.png."
         )
 
-    # Date field — IRCTC's p-calendar accepts typed dates
+    # ── Date field with retry ────────────────────────────────────────
+    def _fill_date():
+        field = page.locator("p-calendar input").first
+        field.click(timeout=_STEP_TIMEOUT_MS)
+        field.fill(date_input)
+        page.keyboard.press("Escape")
+
     try:
-        date_field = page.locator("p-calendar input").first
-        date_field.click()
-        date_field.fill(date_input)
-        page.keyboard.press("Escape")   # close the calendar popup if open
+        _retry("set journey date", _fill_date)
     except Exception as e:
         note = _capture_error_screenshot("irctc_date")
-        return (
-            f"Error setting journey date: {type(e).__name__}: {e}.{note}"
-        )
+        return f"IRCTC search failed after {_STEP_RETRIES} attempts: {e}.{note}"
 
-    # Class dropdown — PrimeNG p-dropdown
-    try:
-        class_dropdown = page.locator("p-dropdown[formcontrolname='journeyClass']").first
-        class_dropdown.click()
+    # ── Class dropdown (best-effort; search still runs on default) ───
+    def _pick_class():
+        dropdown = page.locator("p-dropdown[formcontrolname='journeyClass']").first
+        dropdown.click(timeout=_STEP_TIMEOUT_MS)
         page.wait_for_selector(".ui-dropdown-items li", timeout=5000)
-        # PrimeNG dropdown items have text like "Sleeper (SL)"; match on the code
-        option = page.locator(
+        page.locator(
             f".ui-dropdown-items li:has-text('({class_code})')"
-        ).first
-        option.click()
-    except Exception as e:
-        # Non-fatal — search can proceed with default class
+        ).first.click(timeout=_STEP_TIMEOUT_MS)
+
+    try:
+        _retry("pick travel class", _pick_class)
+    except Exception:
+        # Non-fatal — proceed with IRCTC's default class
         pass
 
-    # Search button — text "Find Trains" or "Search Trains"
+    # ── Click Search with retry ──────────────────────────────────────
+    def _click_search():
+        page.locator(
+            "button:has-text('Find Trains'), button:has-text('Search Trains')"
+        ).first.click(timeout=_STEP_TIMEOUT_MS)
+
     try:
-        button = page.locator("button:has-text('Find Trains'), button:has-text('Search Trains')").first
-        button.click()
+        _retry("click search", _click_search)
     except Exception as e:
         note = _capture_error_screenshot("irctc_search_btn")
         return (
-            f"Error clicking search button: {type(e).__name__}: {e}."
-            f"{note} Form was filled — click Search in the browser to see results."
+            f"Error clicking search button after {_STEP_RETRIES} attempts: "
+            f"{e}.{note} Form is filled — click Search in the browser manually."
         )
 
-    # Give results a moment to render
+    # Let results render
     try:
         page.wait_for_timeout(3000)
     except Exception:
@@ -305,6 +355,32 @@ def search_irctc_train(
     return (
         f"IRCTC search executed: {from_input} → {to_input} on {date_input} "
         f"({class_code}). Results loaded in the browser window. "
-        f"If you see a CAPTCHA on the results page, solve it there and click "
-        f"Search again. Pick a train and continue booking in the browser."
+        f"Pick a train and continue booking there."
     )
+
+
+def _dismiss_overlays(page):
+    """
+    Best-effort dismissal of modals, promo popups, and ads that could block
+    the form. Silent on failure — no reason to break the flow if there's
+    nothing to close.
+    """
+    try:
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(300)
+    except Exception:
+        pass
+    for sel in (
+        ".ui-dialog-titlebar-close",
+        ".modal-close",
+        "[aria-label='Close']",
+        "button.close",
+        ".pi-times",
+    ):
+        try:
+            btn = page.locator(sel).first
+            if btn.is_visible(timeout=500):
+                btn.click(timeout=1500)
+                page.wait_for_timeout(200)
+        except Exception:
+            continue

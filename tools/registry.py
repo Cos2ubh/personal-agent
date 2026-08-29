@@ -518,7 +518,12 @@ _search_irctc_decl = {
         "fields and clicks Search. Runs in the managed browser (see "
         "browser_open) with your persistent IRCTC login session. If a CAPTCHA "
         "appears, the browser stays open and you solve it there. Use when the "
-        "user wants to book a train and has told you the route + date + class."
+        "user wants to book a train and has told you the route + date + class. "
+        "IMPORTANT: this tool has internal retry logic (10 attempts per step). "
+        "Do NOT ask the user to say 'try again' after a failure — the tool "
+        "already retried. If the tool returns a final failure message, just "
+        "report it to the user with the diagnostic hint it provided (usually "
+        "'dismiss the popup / log in / check the screenshot') and stop."
     ),
     "input_schema": {
         "type": "object",
