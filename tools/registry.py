@@ -19,6 +19,7 @@ from memory.reminders import Reminders, parse_time, format_due
 from memory.briefing import compose as compose_briefing
 from memory.semantic import SemanticMemory
 from tools.web import fetch as web_fetch, search as web_search, open_url as web_open_url
+from tools.browser import open_page as browser_open_page, search_irctc_train
 from tools.gmail import (
     list_recent as gmail_list_recent,
     read_email as gmail_read_email,
@@ -490,6 +491,60 @@ _sheets_create_decl = {
 }
 
 
+_browser_open_decl = {
+    "name": "browser_open",
+    "description": (
+        "Open a URL in the MANAGED Chrome browser (Playwright-controlled, "
+        "persistent user profile). Different from open_url — this browser "
+        "instance stays alive across tool calls and can be automated further "
+        "(e.g. by search_irctc_train). Cookies from previous logins persist "
+        "at data/browser_profile/, so if you signed into IRCTC or BookMyShow "
+        "before, you're still logged in. Use when the user wants automation "
+        "on top of the page, not just to view it."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "Full URL starting with http:// or https://"},
+        },
+        "required": ["url"],
+    },
+}
+
+_search_irctc_decl = {
+    "name": "search_irctc_train",
+    "description": (
+        "Automate the IRCTC train search form — fills From, To, Date, Class "
+        "fields and clicks Search. Runs in the managed browser (see "
+        "browser_open) with your persistent IRCTC login session. If a CAPTCHA "
+        "appears, the browser stays open and you solve it there. Use when the "
+        "user wants to book a train and has told you the route + date + class."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "from_station": {
+                "type": "string",
+                "description": "City name or station code (e.g. 'Dehradun', 'DDN', 'New Delhi', 'NDLS')",
+            },
+            "to_station": {
+                "type": "string",
+                "description": "Destination city name or station code",
+            },
+            "journey_date": {
+                "type": "string",
+                "description": "Journey date in DD-MM-YYYY format",
+            },
+            "travel_class": {
+                "type": "string",
+                "description": "SL / 3A / 2A / 1A / CC / 2S / EC / FC. Default SL if omitted.",
+            },
+        },
+        "required": ["from_station", "to_station", "journey_date"],
+    },
+}
+
+
 _open_url_decl = {
     "name": "open_url",
     "description": (
@@ -784,6 +839,8 @@ ALL_TOOLS = [
     _web_fetch_decl,
     _web_search_decl,
     _open_url_decl,
+    _browser_open_decl,
+    _search_irctc_decl,
     _gmail_list_decl,
     _gmail_read_decl,
     _gmail_search_decl,
@@ -815,6 +872,7 @@ DESTRUCTIVE_TOOLS = {
     "sheets_append", "sheets_update", "sheets_create",
     "docs_create", "docs_append",
     "open_url",
+    "browser_open", "search_irctc_train",
 }
 
 # Tools that require typing an explicit uppercase confirmation word (not just 'y').
@@ -976,6 +1034,33 @@ def preview_action(name: str, args: dict) -> str:
             f"  url:     {url}"
         )
 
+    if name == "browser_open":
+        url = args.get("url", "?")
+        try:
+            from urllib.parse import urlparse
+            domain = urlparse(url).netloc or "?"
+        except Exception:
+            domain = "?"
+        return (
+            f"  action:  OPEN in MANAGED Chrome (persistent login session)\n"
+            f"  domain:  {domain}\n"
+            f"  url:     {url}"
+        )
+
+    if name == "search_irctc_train":
+        from_st = args.get("from_station", "?")
+        to_st = args.get("to_station", "?")
+        date = args.get("journey_date", "?")
+        cls = args.get("travel_class", "SL")
+        return (
+            f"  action:  automate IRCTC search — will type into the browser\n"
+            f"  from:    {from_st}\n"
+            f"  to:      {to_st}\n"
+            f"  date:    {date}\n"
+            f"  class:   {cls}\n"
+            f"  note:    browser opens visibly; solve any CAPTCHA when it appears"
+        )
+
     if name == "docs_append":
         doc_id = args.get("doc_id", "?")
         text = args.get("text", "") or ""
@@ -1092,6 +1177,9 @@ TOOL_DISPATCH = {
     "web_fetch":         _wrap(lambda url: web_fetch(url)),
     "web_search":        _wrap(lambda query, max_results=5: web_search(query, max_results)),
     "open_url":          _wrap(lambda url: web_open_url(url)),
+    "browser_open":      _wrap(lambda url: browser_open_page(url)),
+    "search_irctc_train": _wrap(lambda from_station, to_station, journey_date, travel_class="SL":
+                                search_irctc_train(from_station, to_station, journey_date, travel_class)),
     "gmail_list_recent": _wrap(lambda n=10: gmail_list_recent(n)),
     "gmail_read_email":  _wrap(lambda email_id: gmail_read_email(email_id)),
     "gmail_search":      _wrap(lambda query, n=10: gmail_search(query, n)),

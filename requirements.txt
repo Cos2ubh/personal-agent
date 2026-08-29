@@ -14,3 +14,5 @@ sentence-transformers>=3.0.0
 pillow>=10.0.0
 insightface>=0.7.3
 opencv-python>=4.10.0
+playwright>=1.48.0
+playwright-stealth>=1.0.6
