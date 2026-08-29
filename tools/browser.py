@@ -376,42 +376,103 @@ def search_irctc_train(
     target_month_header = target_date.strftime("%B %Y")   # e.g. "September 2026"
     target_day_str = str(target_date.day)
 
+    # Read the month/year label from the open picker. IRCTC / PrimeNG have
+    # gone through several markup versions — try each known selector.
+    def _read_picker_header():
+        for sel in (
+            ".ui-datepicker-title",
+            ".p-datepicker-title",
+            ".ui-datepicker-header",
+            ".p-datepicker-header",
+        ):
+            try:
+                node = page.locator(sel).first
+                text = (node.text_content(timeout=500) or "").strip()
+                if text:
+                    return text
+            except Exception:
+                continue
+        return ""
+
     def _fill_date():
         # 1. Click the input to open the calendar overlay
         field = page.locator("p-calendar input").first
         field.click(timeout=_STEP_TIMEOUT_MS)
-        page.wait_for_selector(".ui-datepicker", timeout=5000)
+        page.wait_for_selector(
+            ".ui-datepicker, .p-datepicker", timeout=5000
+        )
 
-        # 2. Navigate to the target month by clicking "next" until the header matches.
-        #    Cap at 24 months forward so we don't loop forever if navigation breaks.
-        for _ in range(24):
-            try:
-                current = page.locator(".ui-datepicker-title").first.text_content(timeout=1000) or ""
-            except Exception:
-                current = ""
-            if target_month_header in current:
+        # 2. Navigate to target month. Case-insensitive substring match
+        #    handles "September 2026" AND "SEPTEMBER 2026" AND "Sep 2026" etc.
+        target_lower = target_month_header.lower()
+        target_short = target_date.strftime("%b").lower()      # "sep"
+        target_year = target_date.strftime("%Y")               # "2026"
+
+        prev_header = None
+        for hop in range(18):
+            current = _read_picker_header()
+
+            # If we can't read the header, bail loudly with a screenshot
+            if not current:
+                _capture_error_screenshot("irctc_picker_no_header")
+                raise RuntimeError(
+                    "calendar picker header not readable — DOM selectors may "
+                    "have changed. Screenshot saved to data/irctc_picker_no_header_error.png."
+                )
+
+            current_lower = current.lower()
+
+            # Match: full form ("September 2026") OR short-month + year in header
+            if target_lower in current_lower or (
+                target_short in current_lower and target_year in current_lower
+            ):
                 break
+
+            # Infinite-loop guard — if the header didn't change on the last
+            # 'next' click, we're either at the picker's max or the button
+            # isn't working. Bail immediately instead of burning all 18 hops.
+            if hop > 0 and current == prev_header:
+                _capture_error_screenshot("irctc_picker_stuck")
+                raise RuntimeError(
+                    f"calendar navigation stuck on '{current}' — next-arrow "
+                    f"click stopped advancing the picker. Screenshot saved."
+                )
+            prev_header = current
+
             try:
-                page.locator(".ui-datepicker-next").first.click(timeout=2000)
-                page.wait_for_timeout(200)
-            except Exception:
-                break
+                page.locator(
+                    ".ui-datepicker-next, .p-datepicker-next"
+                ).first.click(timeout=2000)
+                page.wait_for_timeout(250)
+            except Exception as click_err:
+                _capture_error_screenshot("irctc_picker_next_click")
+                raise RuntimeError(
+                    f"could not click next-month arrow: {click_err}. "
+                    f"Screenshot saved."
+                )
+        else:
+            # for-else: exhausted 18 hops without matching target
+            _capture_error_screenshot("irctc_picker_target_not_reached")
+            raise RuntimeError(
+                f"could not reach '{target_month_header}' in 18 hops from "
+                f"'{_read_picker_header()}'. Screenshot saved."
+            )
 
         # 3. Click the day cell — filter to same-month cells only
-        #    (PrimeNG shows leading/trailing days from adjacent months in gray)
         day_cell = page.locator(
-            ".ui-datepicker-calendar td:not(.ui-datepicker-other-month) a"
+            ".ui-datepicker-calendar td:not(.ui-datepicker-other-month) a, "
+            ".p-datepicker-calendar td:not(.p-datepicker-other-month) span"
         ).get_by_text(target_day_str, exact=True).first
         day_cell.click(timeout=_STEP_TIMEOUT_MS)
 
-        # 4. Verify — read back the input value to confirm the pick landed
+        # 4. Verify — read back the input value
         page.wait_for_timeout(400)
         actual = field.input_value()
         expected = target_date.strftime("%d/%m/%Y")
         if actual != expected:
             raise RuntimeError(
-                f"Date picker landed on '{actual}' but we wanted '{expected}'. "
-                f"Calendar navigation may have overshot the target month."
+                f"date field landed on '{actual}' but we wanted '{expected}'. "
+                f"Day-cell click may have missed."
             )
 
     try:
