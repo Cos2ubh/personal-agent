@@ -120,7 +120,11 @@ def _ensure_browser():
             f"You may need to run: .\\venv\\Scripts\\playwright install chromium"
         )
 
-    _page = _context.pages[0] if _context.pages else _context.new_page()
+    # Always start a fresh page rather than grabbing _context.pages[0].
+    # A persistent context can carry leftover about:blank or crashed pages
+    # from previous sessions; operating on those means the visible window
+    # and the automation target can drift out of sync.
+    _page = _context.new_page()
 
     # Apply stealth patches (best-effort — API varies across versions)
     try:
