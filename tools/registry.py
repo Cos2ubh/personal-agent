@@ -881,7 +881,7 @@ ALL_TOOLS = [
 # statement that the operation is destructive and non-recoverable.
 DESTRUCTIVE_TOOLS = {
     "write_file",
-    "gmail_draft_new", "gmail_draft_reply", "gmail_send_draft",
+    "gmail_send_draft",
     "calendar_create_event",
     "sheets_append", "sheets_update", "sheets_create",
     "docs_create", "docs_append",

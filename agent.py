@@ -342,7 +342,7 @@ def run_agentic_turn(user_input: str, history: list[dict], system: str) -> str:
                         answer = ""
 
                     if hard:
-                        approved = answer == HARD_APPROVAL_WORD  # case-sensitive
+                        approved = answer.upper() == HARD_APPROVAL_WORD
                     else:
                         approved = answer.lower() == "y"
 
