@@ -11,6 +11,7 @@ Both are worth adding later; today reminders surface on agent start and via
 /reminders and /briefing.
 """
 
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -116,26 +117,40 @@ class Reminders:
 
 # ── Time parsing ──────────────────────────────────────────────────────────
 
+_WEEKDAYS = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
+_RELATIVE_PREFIX = re.compile(
+    r"^(next|this)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+    re.IGNORECASE,
+)
+
 def parse_time(when: str) -> str | None:
     """
     Turn a natural-language time expression into an ISO 8601 UTC string.
 
     Examples that work:
-      'tomorrow 6pm', 'next Thursday', 'in 2 hours', 'July 15 9am',
-      '2026-08-15T14:00', 'Monday morning'.
+      'tomorrow 6pm', 'next Thursday 2pm', 'this Friday', 'in 2 hours',
+      'July 15 9am', '2026-08-15T14:00', 'Monday morning'.
 
     Returns None if the string can't be parsed.
     """
     if not when or not when.strip():
         return None
-    parsed = dateparser.parse(
-        when,
-        settings={
-            "PREFER_DATES_FROM": "future",   # "Thursday" means next Thursday, not last
-            "RETURN_AS_TIMEZONE_AWARE": True,
-            "TIMEZONE": "local",
-        },
-    )
+
+    _settings = {
+        "PREFER_DATES_FROM": "future",
+        "RETURN_AS_TIMEZONE_AWARE": True,
+        "TIMEZONE": "local",
+    }
+
+    parsed = dateparser.parse(when, settings=_settings)
+
+    # dateparser chokes on "next <weekday>" and "this <weekday>" — strip the
+    # leading "next"/"this" and retry since PREFER_DATES_FROM: future already
+    # resolves bare weekday names to the upcoming occurrence.
+    if not parsed and _RELATIVE_PREFIX.match(when):
+        stripped = _RELATIVE_PREFIX.sub(lambda m: m.group(2), when, count=1)
+        parsed = dateparser.parse(stripped, settings=_settings)
+
     if not parsed:
         return None
     return parsed.astimezone(timezone.utc).isoformat()
