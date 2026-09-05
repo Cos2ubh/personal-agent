@@ -512,14 +512,83 @@ if render_approval_card():
 
 user_input = st.chat_input("Ask me anything — I can read files, search email, browse the web...")
 
+def _handle_slash(cmd: str) -> bool:
+    """
+    Run a slash command directly in the Streamlit UI.
+    Returns True if cmd was a slash command (handled or not), False otherwise.
+    """
+    cmd = cmd.strip()
+    if not cmd.startswith("/"):
+        return False
+
+    st.session_state.display_messages.append({"role": "user", "content": cmd})
+
+    if cmd == "/index-docs":
+        from memory.doc_index import index_all
+        with st.spinner("Building document index — may take a while on first run..."):
+            summary = index_all()
+        errors = summary.get("errors", [])
+        msg = (
+            f"**Document index updated.**\n\n"
+            f"- Indexed: {summary['indexed']}\n"
+            f"- Skipped (unchanged): {summary['skipped']}\n"
+            f"- Removed (deleted from disk): {summary['removed']}\n"
+        )
+        if errors:
+            msg += f"- Errors: {len(errors)}\n"
+            for p, e in errors[:3]:
+                msg += f"  - `{Path(p).name}`: {e[:80]}\n"
+        st.session_state.display_messages.append({"role": "assistant", "content": msg})
+        st.rerun()
+        return True
+
+    if cmd == "/index-images":
+        from memory.image_index import index_all as index_images_all
+        with st.spinner("Building image index — downloads CLIP model on first run (~180 MB)..."):
+            summary = index_images_all()
+        errors = summary.get("errors", [])
+        msg = (
+            f"**Image index updated.**\n\n"
+            f"- Indexed: {summary['indexed']}\n"
+            f"- Skipped (unchanged): {summary['skipped']}\n"
+            f"- Removed (deleted from disk): {summary['removed']}\n"
+        )
+        if errors:
+            msg += f"- Errors: {len(errors)}\n"
+        st.session_state.display_messages.append({"role": "assistant", "content": msg})
+        st.rerun()
+        return True
+
+    if cmd == "/index-faces":
+        from memory.face_index import index_all as index_faces_all
+        with st.spinner("Building face index..."):
+            summary = index_faces_all()
+        errors = summary.get("errors", [])
+        msg = (
+            f"**Face index updated.**\n\n"
+            f"- Indexed: {summary['indexed']} (faces found: {summary.get('faces_found', '?')})\n"
+            f"- Skipped (unchanged): {summary['skipped']}\n"
+            f"- Removed (deleted from disk): {summary['removed']}\n"
+        )
+        if errors:
+            msg += f"- Errors: {len(errors)}\n"
+        st.session_state.display_messages.append({"role": "assistant", "content": msg})
+        st.rerun()
+        return True
+
+    # Unknown slash command — let the LLM handle it
+    return False
+
+
 if user_input and not st.session_state.pending_approval:
-    # Show user message immediately
-    st.session_state.display_messages.append({"role": "user", "content": user_input})
-    st.session_state.history.append({"role": "user", "content": user_input})
-    st.session_state.current_user_input = user_input
-    st.session_state.iterations = 0
+    if not _handle_slash(user_input):
+        # Regular message — show user message and run the agent loop
+        st.session_state.display_messages.append({"role": "user", "content": user_input})
+        st.session_state.history.append({"role": "user", "content": user_input})
+        st.session_state.current_user_input = user_input
+        st.session_state.iterations = 0
 
-    with st.spinner("Thinking..."):
-        _run_loop()
+        with st.spinner("Thinking..."):
+            _run_loop()
 
-    st.rerun()
+        st.rerun()
