@@ -388,6 +388,19 @@ def _resolve_approval(approved: bool):
 
 # ── Agentic loop (resumable) ──────────────────────────────────────────────
 
+def _sanitize_history(history: list[dict]) -> list[dict]:
+    """
+    Remove orphaned tool_call entries (no matching tool result).
+    These cause Claude API 400s: 'tool_use ids found without tool_result blocks'.
+    Runs before every LLM call as a safety net.
+    """
+    completed = {h["id"] for h in history if h["role"] == "tool"}
+    return [
+        h for h in history
+        if not (h["role"] == "tool_call" and h.get("id") not in completed)
+    ]
+
+
 def _run_loop():
     """
     Drive the agentic loop from wherever state currently is.
@@ -403,8 +416,9 @@ def _run_loop():
     while ss.iterations < MAX_TOOL_ITERATIONS:
         ss.iterations += 1
 
-        # Reserve a slot in the Streamlit layout. If the response turns out to be
-        # a pure tool call (no text), we clear this slot so nothing is displayed.
+        # Prune any orphaned tool_call entries before sending to the API
+        ss.history = _sanitize_history(ss.history)
+
         response_slot = st.empty()
         result_store: dict = {}
 
@@ -425,16 +439,22 @@ def _run_loop():
 
         response = result_store.get("response")
         if response is None:
-            # result_store not populated — streaming failed silently; fall back
             response_slot.empty()
             ss.display_messages.append({"role": "assistant", "content": "⚠️ No response from LLM."})
             _finish_turn(reply_text=None)
             return
 
         if response.tool_calls:
-            # Clear the chat bubble — tool-call responses rarely have visible text,
-            # and when they do the tool_info line below provides context.
             response_slot.empty()
+
+            # Bug fix: if Claude included text before the tool calls (common preamble
+            # like "Let me find that..."), record it in history so the assistant
+            # message is [text_block, tool_use_block] — matching what Claude sent.
+            # Without this, the tool_use blocks appear in an assistant message with
+            # no preceding text, which mismatches Claude's actual response and can
+            # cause 400 errors on subsequent turns.
+            if response.text.strip():
+                ss.history.append({"role": "model", "content": response.text})
 
             for tc in response.tool_calls:
                 ss.history.append({
@@ -472,7 +492,7 @@ def _run_loop():
                     "id":   tc.id,
                     "content": result,
                 })
-            continue  # loop back with tool results
+            continue
 
         # Final text answer — already streamed into response_slot; record it.
         final_text = response.text or "(agent returned no text)"
