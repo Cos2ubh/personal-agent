@@ -263,7 +263,8 @@ def render_chat_history():
     for idx, msg in enumerate(st.session_state.display_messages):
         role = msg["role"]
         if role == "tool_info":
-            st.info(msg["content"], icon="🔧")
+            with st.expander(f"🔧 {msg.get('tool_name', 'tool')}", expanded=False):
+                st.markdown(f"```\n{msg.get('content', '')}\n```")
         elif role == "image_gallery":
             _render_image_gallery(msg.get("images", []), idx)
         else:
@@ -485,11 +486,13 @@ def _run_loop():
                 result = execute_tool(tc.name, tc.args)
                 tool_slot.empty()
 
-                summary = result[:200] + ("..." if len(result) > 200 else "")
-                st.info(f"🔧 **{tc.name}** — `{summary}`")
+                summary = result[:300] + ("..." if len(result) > 300 else "")
+                with st.expander(f"🔧 {tc.name}", expanded=False):
+                    st.markdown(f"```\n{summary}\n```")
                 ss.display_messages.append({
                     "role": "tool_info",
-                    "content": f"**{tc.name}** — `{summary}`",
+                    "tool_name": tc.name,
+                    "content": summary,
                 })
                 if tc.name in _IMAGE_RETURN_TOOLS:
                     paths = _extract_image_paths(result)
