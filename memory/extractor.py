@@ -15,6 +15,17 @@ import re
 
 from llm import call_llm
 
+# Patterns that indicate a purely conversational message — nothing durable to extract.
+# Running the extractor on these wastes a full API call.
+_CONVERSATIONAL_RE = re.compile(
+    r"^(hi|hello|hey|thanks|thank you|ok|okay|sure|yep|yes|no|nope|bye|"
+    r"good\s*(morning|evening|night|afternoon)|how are you|what'?s up|"
+    r"got it|sounds good|great|nice|cool|perfect|alright|never mind|"
+    r"please|help|can you|tell me|what|how|when|where|why|show me|"
+    r"find|search|look)\b",
+    re.IGNORECASE,
+)
+
 
 EXTRACTOR_SYSTEM = """You extract DURABLE personal facts from a user's message.
 
@@ -103,6 +114,12 @@ def extract_facts(user_message: str, existing_facts: dict[str, str]) -> list[tup
     relative to existing_facts. Never raises — errors return [].
     """
     if not user_message or not user_message.strip():
+        return []
+
+    # Skip the API call for short or clearly conversational messages — they never
+    # contain durable personal facts and the extractor would just return {"facts": []}.
+    msg = user_message.strip()
+    if len(msg) < 25 or _CONVERSATIONAL_RE.match(msg):
         return []
 
     # Build the extraction prompt — include existing facts so the model can dedup

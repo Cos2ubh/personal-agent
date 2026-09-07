@@ -13,15 +13,23 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-import chromadb
-
 CHROMA_PATH = Path(__file__).parent.parent / "data" / "chroma"
+
+_chroma_client = None
+
+
+def _get_client(chroma_path: Path = CHROMA_PATH):
+    global _chroma_client
+    if _chroma_client is None:
+        import chromadb  # lazy — chromadb import costs ~2.5s; defer until first use
+        chroma_path.mkdir(parents=True, exist_ok=True)
+        _chroma_client = chromadb.PersistentClient(path=str(chroma_path))
+    return _chroma_client
 
 
 class EpisodicMemory:
     def __init__(self, chroma_path: Path = CHROMA_PATH):
-        chroma_path.mkdir(parents=True, exist_ok=True)
-        self._client = chromadb.PersistentClient(path=str(chroma_path))
+        self._client = _get_client(chroma_path)
         self._col = self._client.get_or_create_collection("conversations")
 
     def save_turn(self, user_msg: str, agent_reply: str):
