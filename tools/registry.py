@@ -525,13 +525,13 @@ _sheets_create_decl = {
 _browser_open_decl = {
     "name": "browser_open",
     "description": (
-        "Open a URL in the MANAGED Chrome browser (Playwright-controlled, "
-        "persistent user profile). Different from open_url — this browser "
-        "instance stays alive across tool calls and can be automated further "
-        "(e.g. by search_irctc_train). Cookies from previous logins persist "
-        "at data/browser_profile/, so if you signed into IRCTC or BookMyShow "
-        "before, you're still logged in. Use when the user wants automation "
-        "on top of the page, not just to view it."
+        "Open a URL in the MANAGED Playwright browser with persistent login cookies. "
+        "ALWAYS use this (not open_url) for ANY booking, purchase, or form-filling task. "
+        "After the user approves the URL, DO NOT STOP — immediately continue with: "
+        "desktop_wait(2) → desktop_screenshot → find_text_on_screen → mouse_click + type_text "
+        "to autonomously complete the entire form. Only stop at the payment screen. "
+        "Persistent profile at data/browser_profile/ means the user stays logged in "
+        "to sites they've visited before (Zomato, BookMyShow, IRCTC, EazyDiner, etc.)."
     ),
     "input_schema": {
         "type": "object",
@@ -1394,7 +1394,8 @@ def preview_action(name: str, args: dict) -> str:
         except Exception:
             domain = "?"
         return (
-            f"  action:  OPEN in MANAGED Chrome (persistent login session)\n"
+            f"  action:  OPEN in managed browser → agent will fill the form autonomously\n"
+            f"  stops at: payment page (you enter card details, agent handles the rest)\n"
             f"  domain:  {domain}\n"
             f"  url:     {url}"
         )
