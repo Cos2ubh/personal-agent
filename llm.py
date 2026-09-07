@@ -20,12 +20,39 @@ Return contract:
                                     into the corresponding tool_result)
 """
 
+import base64
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from anthropic import Anthropic
 from dotenv import load_dotenv
+
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+
+
+def _tool_result_content(text: str) -> str | list:
+    """
+    If a tool returned a bare image file path, convert it to a vision content
+    block list so Claude can see the image directly.
+    Otherwise return the text unchanged.
+    """
+    stripped = text.strip()
+    p = Path(stripped)
+    if p.suffix.lower() in _IMAGE_EXTENSIONS and p.is_file():
+        try:
+            raw = p.read_bytes()
+            b64 = base64.standard_b64encode(raw).decode()
+            ext = p.suffix.lower().lstrip(".")
+            media_type = "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}"
+            return [
+                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
+                {"type": "text", "text": f"Screenshot saved to: {stripped}"},
+            ]
+        except OSError:
+            pass
+    return text
 
 load_dotenv()
 
@@ -147,6 +174,60 @@ def _get_client() -> Anthropic:
     return _client
 
 
+# ── Shared param builders (used by both call_llm and streaming) ───────────
+
+def _build_create_kwargs(
+    messages: list[dict],
+    system: str,
+    tools: list[dict] | None,
+    model: str,
+) -> dict:
+    """Build the kwargs dict for client.messages.create() or .stream()."""
+    claude_messages = _build_messages(messages)
+
+    system_param: Any = ""
+    if system:
+        system_param = [{
+            "type": "text",
+            "text": system,
+            "cache_control": {"type": "ephemeral"},
+        }]
+
+    tools_param: Any = None
+    if tools:
+        tools_param = [dict(t) for t in tools]
+        # Cache breakpoint on the last tool — stable across most turns
+        tools_param[-1] = {**tools_param[-1], "cache_control": {"type": "ephemeral"}}
+
+    kwargs: dict = {
+        "model": model,
+        "max_tokens": MAX_OUTPUT_TOKENS,
+        "messages": claude_messages,
+    }
+    if system_param:
+        kwargs["system"] = system_param
+    if tools_param:
+        kwargs["tools"] = tools_param
+
+    return kwargs
+
+
+def _parse_message(msg: Any, model: str) -> "LLMResponse":
+    """Parse a raw Anthropic Message object into LLMResponse."""
+    out = LLMResponse(raw=msg, model=model)
+    for block in msg.content:
+        block_type = getattr(block, "type", None)
+        if block_type == "text":
+            out.text += block.text
+        elif block_type == "tool_use":
+            out.tool_calls.append(ToolCall(
+                name=block.name,
+                args=dict(block.input) if block.input else {},
+                id=block.id,
+            ))
+    return out
+
+
 @dataclass
 class ToolCall:
     name: str
@@ -192,7 +273,14 @@ def _build_messages(history: list[dict]) -> list[dict]:
         role = msg["role"]
 
         if role == "user":
-            _append_block("user", {"type": "text", "text": msg["content"]})
+            content = msg["content"]
+            if isinstance(content, list):
+                # Vision message — already formatted as Claude content blocks
+                # (image + text blocks built by the image-upload handler)
+                for block in content:
+                    _append_block("user", block)
+            else:
+                _append_block("user", {"type": "text", "text": content})
 
         elif role == "model":
             text = msg["content"]
@@ -212,7 +300,7 @@ def _build_messages(history: list[dict]) -> list[dict]:
             _append_block("user", {
                 "type": "tool_result",
                 "tool_use_id": msg["id"],
-                "content": msg["content"],
+                "content": _tool_result_content(msg["content"]),
             })
 
     return messages
@@ -222,7 +310,13 @@ def _last_user_text(history: list[dict]) -> str:
     """Find the most recent user turn's text (for routing)."""
     for msg in reversed(history):
         if msg["role"] == "user":
-            return msg.get("content", "") or ""
+            content = msg.get("content", "") or ""
+            if isinstance(content, list):
+                # Vision message — extract text blocks only
+                return " ".join(
+                    b.get("text", "") for b in content if b.get("type") == "text"
+                )
+            return content
     return ""
 
 
@@ -249,46 +343,46 @@ def call_llm(
     else:
         model = _MODEL_ALIASES.get(model.lower(), model)
 
-    client = _get_client()
-    claude_messages = _build_messages(messages)
+    kwargs = _build_create_kwargs(messages, system, tools, model)
+    response = _get_client().messages.create(**kwargs)
+    return _parse_message(response, model)
 
-    # Prompt caching — cache breakpoints on system prompt and on the last tool.
-    system_param: Any = ""
-    if system:
-        system_param = [{
-            "type": "text",
-            "text": system,
-            "cache_control": {"type": "ephemeral"},
-        }]
 
-    tools_param: Any = None
-    if tools:
-        tools_param = [dict(t) for t in tools]
-        if tools_param:
-            tools_param[-1] = {**tools_param[-1], "cache_control": {"type": "ephemeral"}}
+def make_stream_gen(
+    messages: list[dict],
+    system: str = "",
+    tools: list[dict] | None = None,
+    model: str | None = None,
+    result_store: dict | None = None,
+):
+    """
+    Return a generator that yields text chunks from Claude's streaming API.
 
-    create_kwargs: dict = {
-        "model": model,
-        "max_tokens": MAX_OUTPUT_TOKENS,
-        "messages": claude_messages,
-    }
-    if system_param:
-        create_kwargs["system"] = system_param
-    if tools_param:
-        create_kwargs["tools"] = tools_param
+    After the generator is exhausted, result_store["response"] holds the full
+    LLMResponse (including tool_calls). Pass an empty dict as result_store so
+    the caller can inspect the final response after st.write_stream() returns.
 
-    response = client.messages.create(**create_kwargs)
+    Usage (Streamlit):
+        store = {}
+        gen = make_stream_gen(history, system, tools, result_store=store)
+        with slot.chat_message("assistant"):
+            st.write_stream(gen)
+        response = store["response"]   # LLMResponse with text + tool_calls
+    """
+    if model is None:
+        model = pick_model(_last_user_text(messages))
+    else:
+        model = _MODEL_ALIASES.get(model.lower(), model)
 
-    out = LLMResponse(raw=response, model=model)
-    for block in response.content:
-        block_type = getattr(block, "type", None)
-        if block_type == "text":
-            out.text += block.text
-        elif block_type == "tool_use":
-            out.tool_calls.append(ToolCall(
-                name=block.name,
-                args=dict(block.input) if block.input else {},
-                id=block.id,
-            ))
+    kwargs = _build_create_kwargs(messages, system, tools, model)
 
-    return out
+    def _gen():
+        with _get_client().messages.stream(**kwargs) as stream:
+            for text in stream.text_stream:
+                yield text
+            if result_store is not None:
+                result_store["response"] = _parse_message(
+                    stream.get_final_message(), model
+                )
+
+    return _gen()
