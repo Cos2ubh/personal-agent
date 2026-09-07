@@ -20,15 +20,16 @@ from pathlib import Path
 
 import streamlit as st
 
+from memory.watcher import start_watcher, watcher_status
 from config import (
     fs_permissions_configured, setup_fs_permissions,
     get_read_paths, get_write_paths,
 )
-from llm import call_llm, set_forced_model, get_forced_model, SONNET, OPUS, HAIKU
+from llm import call_llm, make_stream_gen, set_forced_model, get_forced_model, SONNET, OPUS, HAIKU
 from memory.semantic import SemanticMemory
 from memory.episodic import EpisodicMemory
 from memory.extractor import extract_facts
-from memory.reminders import Reminders, format_due
+from memory.reminders import format_due
 from memory.briefing import compose as compose_briefing
 from tools.registry import (
     ALL_TOOLS, execute_tool, DESTRUCTIVE_TOOLS, HARD_APPROVAL_TOOLS,
@@ -39,7 +40,7 @@ from tools.audit import format_tail
 MAX_TOOL_ITERATIONS = 15   # matches agent.py — research chains need headroom, runaway loops still caught
 
 # Tools whose results contain image file paths we want to preview inline
-_IMAGE_RETURN_TOOLS = {"search_images_by_description", "find_photos_of"}
+_IMAGE_RETURN_TOOLS = {"search_images_by_description", "find_photos_of", "desktop_screenshot", "screenshot_window"}
 
 # Matches absolute Windows paths ending in image extensions
 _IMAGE_PATH_RE = re.compile(
@@ -128,21 +129,28 @@ Never make up information. If you don't know something, say so."""
 
 
 st.set_page_config(page_title="Personal Agent", page_icon="🤖", layout="wide")
+start_watcher()   # idempotent — only actually starts on the first Streamlit run
 
 
 # ── Session state initialisation ──────────────────────────────────────────
 
 def _init_state():
     ss = st.session_state
-    ss.setdefault("display_messages", [])   # [{"role": "user"|"assistant"|"tool_info", "content": str}]
-    ss.setdefault("history", [])             # LLM conversation history (roles: user, model, tool_call, tool)
-    ss.setdefault("semantic", SemanticMemory())
-    ss.setdefault("episodic", EpisodicMemory())
-    ss.setdefault("reminders", Reminders())
+    # Primitives and plain dicts are safe with setdefault (no side-effects on eval)
+    ss.setdefault("display_messages", [])
+    ss.setdefault("history", [])
     ss.setdefault("due_reminders_shown", False)
-    ss.setdefault("pending_approval", None)  # {"tc_name": str, "tc_args": dict, "hard": bool}
-    ss.setdefault("current_user_input", "")  # user text of the in-flight turn (for later extraction)
+    ss.setdefault("pending_approval", None)
+    ss.setdefault("current_user_input", "")
     ss.setdefault("iterations", 0)
+    # ChromaDB-backed objects: use conditional init so we never construct-and-discard
+    # (setdefault always evaluates its second argument, creating a throwaway client)
+    if "semantic" not in ss:
+        ss["semantic"] = SemanticMemory()
+    # EpisodicMemory deferred — ChromaDB init costs ~2.5s; create on first message
+    if "reminders" not in ss:
+        from memory.reminders import Reminders  # lazy — dateutil dep costs ~0.5s
+        ss["reminders"] = Reminders()
 
 
 _init_state()
@@ -190,6 +198,8 @@ def render_sidebar():
         with st.expander("🔍 Recent activity"):
             st.text(format_tail(15))
 
+        st.caption(f"File watcher: {watcher_status()}")
+
         st.divider()
 
         # Model picker — auto-routes by default; user can lock a specific model.
@@ -234,7 +244,11 @@ def render_chat_history():
             _render_image_gallery(msg.get("images", []), idx)
         else:
             with st.chat_message(role):
-                st.markdown(msg["content"])
+                if msg.get("content"):
+                    st.markdown(msg["content"])
+                # Render uploaded image thumbnails (user messages with pasted images)
+                for img_bytes, img_name in msg.get("uploaded_images", []):
+                    st.image(img_bytes, caption=img_name, width=320)
                 model = msg.get("model", "")
                 if model and role == "assistant":
                     st.caption(f"— via {model.replace('claude-', '')}")
@@ -354,21 +368,50 @@ def _run_loop():
     """
     Drive the agentic loop from wherever state currently is.
     Called on: initial user submit, and after each approval resolution.
-    Sets pending_approval and returns early if a destructive tool call needs consent.
+
+    Each iteration streams Claude's response so the first token appears in ~1s.
+    Tool-call-only responses (no text) clear their container invisibly and loop.
+    Destructive tool calls pause and return — approval card resumes the loop.
     """
     ss = st.session_state
     system_prompt = _build_system_prompt(ss.current_user_input)
 
     while ss.iterations < MAX_TOOL_ITERATIONS:
         ss.iterations += 1
+
+        # Reserve a slot in the Streamlit layout. If the response turns out to be
+        # a pure tool call (no text), we clear this slot so nothing is displayed.
+        response_slot = st.empty()
+        result_store: dict = {}
+
         try:
-            response = call_llm(ss.history, system=system_prompt, tools=ALL_TOOLS)
+            gen = make_stream_gen(
+                ss.history,
+                system=system_prompt,
+                tools=ALL_TOOLS,
+                result_store=result_store,
+            )
+            with response_slot.chat_message("assistant"):
+                st.write_stream(gen)
         except Exception as e:
+            response_slot.empty()
             ss.display_messages.append({"role": "assistant", "content": f"⚠️ LLM error: {e}"})
             _finish_turn(reply_text=None)
             return
 
+        response = result_store.get("response")
+        if response is None:
+            # result_store not populated — streaming failed silently; fall back
+            response_slot.empty()
+            ss.display_messages.append({"role": "assistant", "content": "⚠️ No response from LLM."})
+            _finish_turn(reply_text=None)
+            return
+
         if response.tool_calls:
+            # Clear the chat bubble — tool-call responses rarely have visible text,
+            # and when they do the tool_info line below provides context.
+            response_slot.empty()
+
             for tc in response.tool_calls:
                 ss.history.append({
                     "role": "tool_call",
@@ -378,7 +421,6 @@ def _run_loop():
                 })
 
                 if tc.name in DESTRUCTIVE_TOOLS:
-                    # Pause here — user must approve before we proceed
                     ss.pending_approval = {
                         "tc_name": tc.name,
                         "tc_args": dict(tc.args),
@@ -387,14 +429,12 @@ def _run_loop():
                     }
                     return
 
-                # Safe tool: execute inline
                 result = execute_tool(tc.name, tc.args)
                 summary = result[:200] + ("..." if len(result) > 200 else "")
                 ss.display_messages.append({
                     "role": "tool_info",
                     "content": f"**{tc.name}** — `{summary}`",
                 })
-                # If the tool returned image paths, render a gallery inline
                 if tc.name in _IMAGE_RETURN_TOOLS:
                     paths = _extract_image_paths(result)
                     if paths:
@@ -408,9 +448,9 @@ def _run_loop():
                     "id":   tc.id,
                     "content": result,
                 })
-            continue  # loop back to call_llm with new tool results
+            continue  # loop back with tool results
 
-        # Final answer
+        # Final text answer — already streamed into response_slot; record it.
         final_text = response.text or "(agent returned no text)"
         ss.history.append({"role": "model", "content": final_text})
         ss.display_messages.append({
@@ -435,7 +475,7 @@ def _finish_turn(reply_text: str | None):
 
     if reply_text and ss.current_user_input:
         try:
-            ss.episodic.save_turn(ss.current_user_input, reply_text)
+            _get_episodic().save_turn(ss.current_user_input, reply_text)
         except Exception:
             pass
 
@@ -453,6 +493,14 @@ def _finish_turn(reply_text: str | None):
     ss.current_user_input = ""
 
 
+def _get_episodic() -> "EpisodicMemory":
+    """Create EpisodicMemory on first use, not on page load."""
+    ss = st.session_state
+    if "episodic" not in ss:
+        ss["episodic"] = EpisodicMemory()
+    return ss["episodic"]
+
+
 def _build_system_prompt(user_msg: str) -> str:
     parts = [SYSTEM_BASE]
 
@@ -467,9 +515,11 @@ def _build_system_prompt(user_msg: str) -> str:
     if facts_block:
         parts.append(facts_block)
 
-    if user_msg:
+    # Skip episodic recall for short/conversational messages — embedding "hello"
+    # costs a ChromaDB round-trip and never returns useful context.
+    if user_msg and len(user_msg.strip()) > 25:
         try:
-            history_block = st.session_state.episodic.as_prompt_block(user_msg)
+            history_block = _get_episodic().as_prompt_block(user_msg)
             if history_block:
                 parts.append(history_block)
         except Exception:
@@ -510,7 +560,11 @@ if render_approval_card():
     # When a card is showing, the chat_input is still active but the loop is paused
     st.info("Resolve the approval above to continue.", icon="⏸️")
 
-user_input = st.chat_input("Ask me anything — I can read files, search email, browse the web...")
+user_input = st.chat_input(
+    "Ask me anything — paste/attach an image or type a question...",
+    accept_file=True,
+    file_type=["jpg", "jpeg", "png", "gif", "webp"],
+)
 
 def _handle_slash(cmd: str) -> bool:
     """
@@ -576,19 +630,80 @@ def _handle_slash(cmd: str) -> bool:
         st.rerun()
         return True
 
+    if cmd.startswith("/smart-search "):
+        query = cmd[len("/smart-search "):].strip()
+        if not query:
+            st.session_state.display_messages.append({
+                "role": "assistant",
+                "content": "Usage: `/smart-search <query>`  e.g. `/smart-search aadhaar card`",
+            })
+            st.rerun()
+            return True
+        from memory.search import search_unified, format_unified_results
+        with st.spinner(f"Searching for '{query}'…"):
+            result = search_unified(query)
+        msg = format_unified_results(query, result)
+        st.session_state.display_messages.append({"role": "assistant", "content": msg})
+
+        # Render image gallery if any image hits came back
+        image_hits = result.get("images", [])
+        paths = [h["path"] for h in image_hits if h.get("path")]
+        existing_paths = [p for p in paths if Path(p).is_file()]
+        if existing_paths:
+            st.session_state.display_messages.append({
+                "role": "image_gallery",
+                "images": existing_paths,
+            })
+
+        st.rerun()
+        return True
+
     # Unknown slash command — let the LLM handle it
     return False
 
 
 if user_input and not st.session_state.pending_approval:
-    if not _handle_slash(user_input):
-        # Regular message — show user message and run the agent loop
-        st.session_state.display_messages.append({"role": "user", "content": user_input})
-        st.session_state.history.append({"role": "user", "content": user_input})
-        st.session_state.current_user_input = user_input
+    import base64
+
+    text_part  = (user_input.text or "").strip()
+    files_part = user_input.files or []
+
+    # Slash commands are text-only
+    if text_part.startswith("/") and not files_part and _handle_slash(text_part):
+        pass  # handled
+    else:
+        if files_part:
+            # Build Claude vision content blocks
+            content_blocks = []
+            uploaded_images = []   # (bytes, name) stored for display
+
+            for f in files_part:
+                raw = f.read()
+                b64 = base64.standard_b64encode(raw).decode("utf-8")
+                media_type = f.type or "image/jpeg"
+                content_blocks.append({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": media_type, "data": b64},
+                })
+                uploaded_images.append((raw, f.name))
+
+            prompt_text = text_part or "What's in this image? Describe it thoroughly."
+            content_blocks.append({"type": "text", "text": prompt_text})
+
+            st.session_state.history.append({"role": "user", "content": content_blocks})
+            st.session_state.display_messages.append({
+                "role": "user",
+                "content": text_part,
+                "uploaded_images": uploaded_images,
+            })
+            st.session_state.current_user_input = prompt_text
+
+        else:
+            # Plain text message
+            st.session_state.history.append({"role": "user", "content": text_part})
+            st.session_state.display_messages.append({"role": "user", "content": text_part})
+            st.session_state.current_user_input = text_part
+
         st.session_state.iterations = 0
-
-        with st.spinner("Thinking..."):
-            _run_loop()
-
+        _run_loop()
         st.rerun()

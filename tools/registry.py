@@ -10,45 +10,76 @@ To add a new tool: write the function, add a declaration dict, register it.
 
 from pathlib import Path
 
+# Fast imports — kept eager
 from tools.filesystem import read_file, list_dir, write_file, find_files, PermissionDenied
 from tools.doc_extract import extract_text as doc_extract_text
 from memory.doc_index import search_documents, format_search_results
 from memory.image_index import search_images, format_search_results as format_image_results
-from memory.face_index import register_face as face_register, list_registered as face_list, find_photos_of as face_find
-from memory.reminders import Reminders, parse_time, format_due
-from memory.briefing import compose as compose_briefing
+from memory.search import search_unified, format_unified_results
 from memory.semantic import SemanticMemory
-from tools.web import fetch as web_fetch, search as web_search, open_url as web_open_url
-from tools.browser import open_page as browser_open_page, search_irctc_train
-from tools.gmail import (
-    list_recent as gmail_list_recent,
-    read_email as gmail_read_email,
-    search as gmail_search,
-    draft_new as gmail_draft_new,
-    draft_reply as gmail_draft_reply,
-    send_draft as gmail_send_draft,
-    get_draft_preview as gmail_get_draft_preview,
-)
-from tools.calendar import (
-    list_today as cal_list_today,
-    list_upcoming as cal_list_upcoming,
-    create_event as cal_create_event,
-)
-from tools.sheets import (
-    find   as sheets_find,
-    read   as sheets_read,
-    append as sheets_append,
-    update as sheets_update,
-    create as sheets_create,
-)
-from tools.docs import (
-    find   as docs_find,
-    read   as docs_read,
-    create as docs_create,
-    append as docs_append,
-)
 from tools.audit import log as audit_log
 from config import get_read_paths, get_write_paths
+
+
+# ── Lazy module loaders ───────────────────────────────────────────────────
+# face_index (1.6s), reminders (0.5s), web (0.4s), gmail (0.3s) are deferred
+# until first actual tool call so the landing page stays fast.
+
+def _dt(fn: str):
+    """Lazy desktop loader — defers pyautogui until first call."""
+    def _call(**kwargs):
+        import tools.desktop as _d
+        return getattr(_d, fn)(**kwargs)
+    return _call
+
+
+def _cal(fn: str):
+    def _call(**kwargs):
+        import tools.calendar as _c
+        return getattr(_c, fn)(**kwargs)
+    return _call
+
+
+def _face(fn: str):
+    def _call(**kwargs):
+        import memory.face_index as _f
+        return getattr(_f, fn)(**kwargs)
+    return _call
+
+
+def _web(fn: str):
+    def _call(**kwargs):
+        import tools.web as _w
+        return getattr(_w, fn)(**kwargs)
+    return _call
+
+
+def _gmail(fn: str):
+    def _call(**kwargs):
+        import tools.gmail as _g
+        return getattr(_g, fn)(**kwargs)
+    return _call
+
+
+# Reminders singleton — lazy so the module (and its dateutil dep) loads on first use
+_reminders_instance = None
+
+def _reminders():
+    global _reminders_instance
+    if _reminders_instance is None:
+        from memory.reminders import Reminders
+        _reminders_instance = Reminders()
+    return _reminders_instance
+
+
+def _parse_time(when: str):
+    from memory.reminders import parse_time
+    return parse_time(when)
+
+
+def _format_due(iso: str):
+    from memory.reminders import format_due
+    return format_due(iso)
 
 
 # ── Tool declarations (provider-neutral JSON Schema) ─────────────────────
@@ -797,6 +828,28 @@ _search_docs_decl = {
     },
 }
 
+_smart_search_decl = {
+    "name": "smart_search",
+    "description": (
+        "Unified search across documents AND images with automatic intent routing. "
+        "Use this when the user's query could be about either a file or a photo, "
+        "or when you're unsure which index to hit. The tool classifies the query "
+        "intent and searches only the relevant index — a photo query never touches "
+        "the document collection and vice versa. For clearly document-only queries "
+        "use search_documents_by_content; for clearly image-only queries use "
+        "search_images_by_description. Use smart_search for anything ambiguous "
+        "like 'find my aadhaar', 'show me the graduation stuff', or 'find passport'."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Natural-language description of what to find"},
+            "n":     {"type": "integer", "description": "Max results per index (1–20, default 5)"},
+        },
+        "required": ["query"],
+    },
+}
+
 _extract_text_decl = {
     "name": "extract_text",
     "description": (
@@ -815,6 +868,269 @@ _extract_text_decl = {
             "path": {"type": "string", "description": "Absolute path to the document file"},
         },
         "required": ["path"],
+    },
+}
+
+_desktop_screenshot_decl = {
+    "name": "desktop_screenshot",
+    "description": (
+        "Take a screenshot of the entire screen (or a specific region) and return "
+        "the image so you can SEE what is currently on screen. Use this as your "
+        "eyes before clicking or typing — always screenshot first to confirm the "
+        "current state, then act. After each action (click, type, etc.), take "
+        "another screenshot to verify the result."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "region": {
+                "type": "array",
+                "description": "Optional [left, top, width, height] in pixels to capture only part of the screen. Omit for full screen.",
+                "items": {"type": "integer"},
+            },
+        },
+    },
+}
+
+_mouse_move_decl = {
+    "name": "mouse_move",
+    "description": "Move the mouse cursor to a specific (x, y) screen coordinate without clicking.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "x": {"type": "integer", "description": "Horizontal pixel coordinate"},
+            "y": {"type": "integer", "description": "Vertical pixel coordinate"},
+        },
+        "required": ["x", "y"],
+    },
+}
+
+_mouse_click_decl = {
+    "name": "mouse_click",
+    "description": (
+        "Click at a screen coordinate. Use 'left' for normal clicks, 'right' for "
+        "context menus, 'middle' for middle-click. Set clicks=2 for double-click. "
+        "Always screenshot first to confirm the target location before clicking."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "x":       {"type": "integer", "description": "Horizontal pixel coordinate"},
+            "y":       {"type": "integer", "description": "Vertical pixel coordinate"},
+            "button":  {"type": "string",  "description": "'left' (default), 'right', or 'middle'"},
+            "clicks":  {"type": "integer", "description": "1 for single-click (default), 2 for double-click"},
+        },
+        "required": ["x", "y"],
+    },
+}
+
+_mouse_drag_decl = {
+    "name": "mouse_drag",
+    "description": "Click and drag from one screen coordinate to another. Useful for sliders, window resizing, and drag-and-drop.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "start_x": {"type": "integer"},
+            "start_y": {"type": "integer"},
+            "end_x":   {"type": "integer"},
+            "end_y":   {"type": "integer"},
+        },
+        "required": ["start_x", "start_y", "end_x", "end_y"],
+    },
+}
+
+_desktop_scroll_decl = {
+    "name": "desktop_scroll",
+    "description": "Scroll up or down at a screen coordinate. Use to navigate long pages or lists.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "x":         {"type": "integer", "description": "Horizontal coordinate to scroll at"},
+            "y":         {"type": "integer", "description": "Vertical coordinate to scroll at"},
+            "direction": {"type": "string",  "description": "'down' (default) or 'up'"},
+            "amount":    {"type": "integer", "description": "Number of scroll steps (default 3)"},
+        },
+        "required": ["x", "y"],
+    },
+}
+
+_type_text_decl = {
+    "name": "type_text",
+    "description": (
+        "Type a string of characters using the keyboard — as if you're typing into "
+        "a focused text field. Click the target field first, then call this. "
+        "For special keys (Enter, Ctrl+C, etc.) use key_press instead."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "text":     {"type": "string",  "description": "The text to type"},
+            "interval": {"type": "number",  "description": "Seconds between keystrokes (default 0.03). Slow down if text drops characters."},
+        },
+        "required": ["text"],
+    },
+}
+
+_key_press_decl = {
+    "name": "key_press",
+    "description": (
+        "Press a key or keyboard shortcut. "
+        "Single keys: 'enter', 'escape', 'tab', 'space', 'backspace', 'delete', 'f5', "
+        "'home', 'end', 'pageup', 'pagedown', 'up', 'down', 'left', 'right'. "
+        "Combinations: 'ctrl+c', 'ctrl+v', 'ctrl+z', 'ctrl+a', 'alt+f4', 'win+d', "
+        "'ctrl+shift+t', 'alt+tab'. "
+        "Multiple sequential: 'enter,tab,enter'."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "keys": {"type": "string", "description": "Key or combination to press"},
+        },
+        "required": ["keys"],
+    },
+}
+
+_get_screen_size_decl = {
+    "name": "get_screen_size",
+    "description": "Return the current screen resolution in pixels. Useful before computing click coordinates.",
+    "input_schema": {"type": "object", "properties": {}},
+}
+
+_get_mouse_position_decl = {
+    "name": "get_mouse_position",
+    "description": "Return the current (x, y) position of the mouse cursor.",
+    "input_schema": {"type": "object", "properties": {}},
+}
+
+_clipboard_read_decl = {
+    "name": "clipboard_read",
+    "description": "Read the current contents of the system clipboard. Use after selecting and copying text on screen (e.g. after Ctrl+C), or to check what was last copied.",
+    "input_schema": {"type": "object", "properties": {}},
+}
+
+_clipboard_write_decl = {
+    "name": "clipboard_write",
+    "description": "Write text to the system clipboard so it can be pasted (Ctrl+V) anywhere. Faster and more reliable than type_text for long content.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string", "description": "Text to place on the clipboard"},
+        },
+        "required": ["text"],
+    },
+}
+
+_wait_decl = {
+    "name": "desktop_wait",
+    "description": "Pause for N seconds (max 15). Use after launching an app, clicking a button, or navigating to give the OS time to respond before taking the next screenshot.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "seconds": {"type": "number", "description": "Seconds to wait (0.5–15)"},
+        },
+        "required": ["seconds"],
+    },
+}
+
+_list_windows_decl = {
+    "name": "list_windows",
+    "description": "List all open windows with their titles and positions. Use this first to find the exact window title before calling focus_window or screenshot_window.",
+    "input_schema": {"type": "object", "properties": {}},
+}
+
+_focus_window_decl = {
+    "name": "focus_window",
+    "description": "Bring a window to the foreground by partial title match. Use list_windows first to find exact titles.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "description": "Partial window title to match (case-insensitive)"},
+        },
+        "required": ["title"],
+    },
+}
+
+_minimize_window_decl = {
+    "name": "minimize_window",
+    "description": "Minimize a window by partial title match.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "description": "Partial window title"},
+        },
+        "required": ["title"],
+    },
+}
+
+_maximize_window_decl = {
+    "name": "maximize_window",
+    "description": "Maximize a window by partial title match.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "description": "Partial window title"},
+        },
+        "required": ["title"],
+    },
+}
+
+_close_window_decl = {
+    "name": "close_window",
+    "description": "Close a window by partial title match. The app may prompt to save — take a screenshot after to check.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "description": "Partial window title"},
+        },
+        "required": ["title"],
+    },
+}
+
+_screenshot_window_decl = {
+    "name": "screenshot_window",
+    "description": "Take a screenshot of a specific window (not the full screen) by partial title match. Useful when you only need to see one app. Use list_windows to find titles.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "description": "Partial window title to match"},
+        },
+        "required": ["title"],
+    },
+}
+
+_launch_app_decl = {
+    "name": "launch_app",
+    "description": (
+        "Launch an application or open a file/URL. "
+        "Examples: 'notepad', 'calc', 'chrome', 'code', 'explorer', "
+        "'C:\\\\path\\\\to\\\\app.exe', 'https://google.com'. "
+        "After launching, use desktop_wait(2) then desktop_screenshot() to confirm it opened."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "command": {"type": "string", "description": "App name, executable path, or URL to open"},
+        },
+        "required": ["command"],
+    },
+}
+
+_find_text_decl = {
+    "name": "find_text_on_screen",
+    "description": (
+        "Use OCR to find where specific text appears on screen and return its (x, y) "
+        "center coordinates — ready to pass to mouse_click without guessing pixel positions. "
+        "This is the reliable way to click buttons, menu items, and labels. "
+        "First run downloads the OCR model (~200MB, one-time). "
+        "Pass screenshot_path to search an existing screenshot instead of taking a new one."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "text":            {"type": "string", "description": "Text to find on screen (partial match)"},
+            "screenshot_path": {"type": "string", "description": "Optional path to an existing screenshot. Omit to take a fresh screenshot."},
+        },
+        "required": ["text"],
     },
 }
 
@@ -841,6 +1157,7 @@ ALL_TOOLS = [
     _extract_text_decl,
     _search_docs_decl,
     _search_images_decl,
+    _smart_search_decl,
     _register_face_decl,
     _list_faces_decl,
     _find_photos_of_decl,
@@ -873,6 +1190,27 @@ ALL_TOOLS = [
     _docs_read_decl,
     _docs_create_decl,
     _docs_append_decl,
+    # Desktop / computer-use
+    _desktop_screenshot_decl,
+    _mouse_move_decl,
+    _mouse_click_decl,
+    _mouse_drag_decl,
+    _desktop_scroll_decl,
+    _type_text_decl,
+    _key_press_decl,
+    _get_screen_size_decl,
+    _get_mouse_position_decl,
+    _clipboard_read_decl,
+    _clipboard_write_decl,
+    _wait_decl,
+    _list_windows_decl,
+    _focus_window_decl,
+    _minimize_window_decl,
+    _maximize_window_decl,
+    _close_window_decl,
+    _screenshot_window_decl,
+    _launch_app_decl,
+    _find_text_decl,
 ]
 
 
@@ -1092,7 +1430,7 @@ def preview_action(name: str, args: dict) -> str:
     if name == "gmail_send_draft":
         draft_id = args.get("draft_id", "?")
         # Fetch the actual draft so the user sees EXACTLY what will be sent
-        prev = gmail_get_draft_preview(draft_id)
+        prev = _gmail("get_draft_preview")(draft_id=draft_id)
         if prev.get("error"):
             return (
                 f"  action:  SEND draft {draft_id}\n"
@@ -1125,36 +1463,33 @@ def _wrap(fn):
     return inner
 
 
-_reminders = Reminders()
-
-
 def _set_reminder_impl(text: str, when: str) -> str:
-    due_iso = parse_time(when)
+    due_iso = _parse_time(when)
     if not due_iso:
         return f"Error: could not parse time '{when}'. Try 'tomorrow 6pm', 'next Thursday', 'in 2 hours', etc."
-    rid = _reminders.add(text=text.strip(), due_at_iso=due_iso)
-    return f"Reminder #{rid} saved: '{text}' due {format_due(due_iso)}"
+    rid = _reminders().add(text=text.strip(), due_at_iso=due_iso)
+    return f"Reminder #{rid} saved: '{text}' due {_format_due(due_iso)}"
 
 
 def _list_reminders_impl(include_completed: bool = False) -> str:
-    items = _reminders.list_all(include_completed=include_completed)
+    items = _reminders().list_all(include_completed=include_completed)
     if not items:
         return "No reminders." if not include_completed else "No reminders (nothing pending or completed)."
     lines = []
     for r in items:
         marker = "✓" if r["completed_at"] else " "
-        lines.append(f"  [{marker}] #{r['id']}  {format_due(r['due_at'])}  —  {r['text']}")
+        lines.append(f"  [{marker}] #{r['id']}  {_format_due(r['due_at'])}  —  {r['text']}")
     return "\n".join(lines)
 
 
 def _complete_reminder_impl(reminder_id: int) -> str:
-    if _reminders.complete(int(reminder_id)):
+    if _reminders().complete(int(reminder_id)):
         return f"Reminder #{reminder_id} marked done."
     return f"Reminder #{reminder_id} not found or already completed."
 
 
 def _delete_reminder_impl(reminder_id: int) -> str:
-    if _reminders.delete(int(reminder_id)):
+    if _reminders().delete(int(reminder_id)):
         return f"Reminder #{reminder_id} deleted."
     return f"Reminder #{reminder_id} not found."
 
@@ -1179,36 +1514,58 @@ TOOL_DISPATCH = {
     "extract_text":      _wrap(lambda path: doc_extract_text(path)),
     "search_documents_by_content": _wrap(lambda query, n=5: format_search_results(query, search_documents(query, n))),
     "search_images_by_description": _wrap(lambda query, n=5: format_image_results(query, search_images(query, n))),
-    "register_face":          _wrap(lambda name, sample_path: face_register(name, sample_path)),
-    "list_registered_faces":  _wrap(lambda: face_list()),
-    "find_photos_of":         _wrap(lambda name, n=20: face_find(name, n=n)),
+    "smart_search": _wrap(lambda query, n=5: format_unified_results(query, search_unified(query, n))),
+    "register_face":          _wrap(lambda name, sample_path: _face("register_face")(name=name, sample_path=sample_path)),
+    "list_registered_faces":  _wrap(lambda: _face("list_registered")()),
+    "find_photos_of":         _wrap(lambda name, n=20: _face("find_photos_of")(name=name, n=n)),
     "set_reminder":      _wrap(lambda text, when: _set_reminder_impl(text, when)),
     "list_reminders":    _wrap(lambda include_completed=False: _list_reminders_impl(include_completed)),
     "complete_reminder": _wrap(lambda reminder_id: _complete_reminder_impl(reminder_id)),
     "delete_reminder":   _wrap(lambda reminder_id: _delete_reminder_impl(reminder_id)),
-    "morning_briefing":  _wrap(lambda: compose_briefing(SemanticMemory())),
+    "morning_briefing":  _wrap(lambda: __import__('memory.briefing', fromlist=['compose']).compose(SemanticMemory())),
     "list_allowed_paths": _wrap(lambda: _list_allowed_paths_impl()),
-    "web_fetch":         _wrap(lambda url: web_fetch(url)),
-    "web_search":        _wrap(lambda query, max_results=5: web_search(query, max_results)),
-    "open_url":          _wrap(lambda url: web_open_url(url)),
+    "web_fetch":         _wrap(lambda url: _web("fetch")(url=url)),
+    "web_search":        _wrap(lambda query, max_results=5: _web("search")(query=query, max_results=max_results)),
+    "open_url":          _wrap(lambda url: _web("open_url")(url=url)),
     "browser_open":      _wrap(lambda url: browser_open_page(url)),
     "search_irctc_train": _wrap(lambda from_station, to_station, journey_date, travel_class="SL":
                                 search_irctc_train(from_station, to_station, journey_date, travel_class)),
-    "gmail_list_recent": _wrap(lambda n=10: gmail_list_recent(n)),
-    "gmail_read_email":  _wrap(lambda email_id: gmail_read_email(email_id)),
-    "gmail_search":      _wrap(lambda query, n=10: gmail_search(query, n)),
-    "gmail_draft_new":   _wrap(lambda to, subject, body, cc="": gmail_draft_new(to, subject, body, cc)),
-    "gmail_draft_reply": _wrap(lambda email_id, body: gmail_draft_reply(email_id, body)),
-    "gmail_send_draft":  _wrap(lambda draft_id: gmail_send_draft(draft_id)),
-    "calendar_list_today":    _wrap(lambda: cal_list_today()),
-    "calendar_list_upcoming": _wrap(lambda days=7: cal_list_upcoming(days)),
+    "gmail_list_recent": _wrap(lambda n=10: _gmail("list_recent")(n=n)),
+    "gmail_read_email":  _wrap(lambda email_id: _gmail("read_email")(email_id=email_id)),
+    "gmail_search":      _wrap(lambda query, n=10: _gmail("search")(query=query, n=n)),
+    "gmail_draft_new":   _wrap(lambda to, subject, body, cc="": _gmail("draft_new")(to=to, subject=subject, body=body, cc=cc)),
+    "gmail_draft_reply": _wrap(lambda email_id, body: _gmail("draft_reply")(email_id=email_id, body=body)),
+    "gmail_send_draft":  _wrap(lambda draft_id: _gmail("send_draft")(draft_id=draft_id)),
+    "calendar_list_today":    _wrap(lambda: _cal("list_today")()),
+    "calendar_list_upcoming": _wrap(lambda days=7: _cal("list_upcoming")(days=days)),
     "calendar_create_event":  _wrap(lambda summary, start, end="", description="", location="", attendees="":
-                                    cal_create_event(summary, start, end, description, location, attendees)),
+                                    _cal("create_event")(summary=summary, start=start, end=end, description=description, location=location, attendees=attendees)),
     "sheets_find":   _wrap(lambda query, n=5: sheets_find(query, n)),
     "sheets_read":   _wrap(lambda spreadsheet_id, range="": sheets_read(spreadsheet_id, range)),
     "sheets_append": _wrap(lambda spreadsheet_id, range, values: sheets_append(spreadsheet_id, range, values)),
     "sheets_update": _wrap(lambda spreadsheet_id, range, values: sheets_update(spreadsheet_id, range, values)),
     "sheets_create": _wrap(lambda title: sheets_create(title)),
+    # Desktop / computer-use (all lazy — pyautogui only imported on first call)
+    "desktop_screenshot":  _wrap(lambda region=None: _dt("screenshot")(region=tuple(region) if region else None)),
+    "mouse_move":          _wrap(lambda x, y: _dt("mouse_move")(x=int(x), y=int(y))),
+    "mouse_click":         _wrap(lambda x, y, button="left", clicks=1: _dt("mouse_click")(x=int(x), y=int(y), button=button, clicks=int(clicks))),
+    "mouse_drag":          _wrap(lambda start_x, start_y, end_x, end_y: _dt("mouse_drag")(start_x=int(start_x), start_y=int(start_y), end_x=int(end_x), end_y=int(end_y))),
+    "desktop_scroll":      _wrap(lambda x, y, direction="down", amount=3: _dt("scroll")(x=int(x), y=int(y), direction=direction, amount=int(amount))),
+    "type_text":           _wrap(lambda text, interval=0.03: _dt("type_text")(text=text, interval=float(interval))),
+    "key_press":           _wrap(lambda keys: _dt("key_press")(keys=keys)),
+    "get_screen_size":     _wrap(lambda: _dt("get_screen_size")()),
+    "get_mouse_position":  _wrap(lambda: _dt("get_mouse_position")()),
+    "clipboard_read":      _wrap(lambda: _dt("clipboard_read")()),
+    "clipboard_write":     _wrap(lambda text: _dt("clipboard_write")(text=text)),
+    "desktop_wait":        _wrap(lambda seconds: _dt("wait")(seconds=float(seconds))),
+    "list_windows":        _wrap(lambda: _dt("list_windows")()),
+    "focus_window":        _wrap(lambda title: _dt("focus_window")(title=title)),
+    "minimize_window":     _wrap(lambda title: _dt("minimize_window")(title=title)),
+    "maximize_window":     _wrap(lambda title: _dt("maximize_window")(title=title)),
+    "close_window":        _wrap(lambda title: _dt("close_window")(title=title)),
+    "screenshot_window":   _wrap(lambda title: _dt("screenshot_window")(title=title)),
+    "launch_app":          _wrap(lambda command: _dt("launch_app")(command=command)),
+    "find_text_on_screen": _wrap(lambda text, screenshot_path=None: _dt("find_text_on_screen")(text=text, screenshot_path=screenshot_path)),
     "docs_find":     _wrap(lambda query, n=5: docs_find(query, n)),
     "docs_read":     _wrap(lambda doc_id: docs_read(doc_id)),
     "docs_create":   _wrap(lambda title, content="": docs_create(title, content)),
