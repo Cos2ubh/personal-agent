@@ -422,6 +422,10 @@ def _run_loop():
         response_slot = st.empty()
         result_store: dict = {}
 
+        # Show a "thinking" indicator while waiting for the first token.
+        # Replaced by streaming content once the LLM starts responding.
+        response_slot.status("Thinking...", state="running")
+
         try:
             gen = make_stream_gen(
                 ss.history,
@@ -429,6 +433,7 @@ def _run_loop():
                 tools=ALL_TOOLS,
                 result_store=result_store,
             )
+            response_slot.empty()  # clear thinking indicator
             with response_slot.chat_message("assistant"):
                 st.write_stream(gen)
         except Exception as e:
@@ -473,8 +478,15 @@ def _run_loop():
                     }
                     return
 
+                # Show tool activity immediately inline — visible during this
+                # loop iteration, not just after st.rerun() at the end.
+                tool_slot = st.empty()
+                tool_slot.status(f"Using {tc.name}...", state="running")
                 result = execute_tool(tc.name, tc.args)
+                tool_slot.empty()
+
                 summary = result[:200] + ("..." if len(result) > 200 else "")
+                st.info(f"🔧 **{tc.name}** — `{summary}`")
                 ss.display_messages.append({
                     "role": "tool_info",
                     "content": f"**{tc.name}** — `{summary}`",
@@ -747,6 +759,15 @@ if user_input and not st.session_state.pending_approval:
             st.session_state.history.append({"role": "user", "content": text_part})
             st.session_state.display_messages.append({"role": "user", "content": text_part})
             st.session_state.current_user_input = text_part
+
+        # Render user message immediately so it's visible before the loop starts.
+        # render_chat_history() already ran at the top of this script execution,
+        # so we must render the new message inline here.
+        with st.chat_message("user"):
+            if text_part:
+                st.markdown(text_part)
+            for img_bytes, img_name in (uploaded_images if files_part else []):
+                st.image(img_bytes, caption=img_name, width=320)
 
         st.session_state.iterations = 0
         _run_loop()
