@@ -531,7 +531,7 @@ def _run_loop():
 
 
 def _finish_turn(reply_text: str | None):
-    """Post-turn housekeeping: episodic save + fact extraction. Reset iteration counter."""
+    """Post-turn housekeeping: episodic save + fact extraction + session summary."""
     ss = st.session_state
     ss.iterations = 0
 
@@ -552,7 +552,49 @@ def _finish_turn(reply_text: str | None):
         except Exception:
             pass
 
+        # Session continuity: write a compact summary every 5 turns so the
+        # next session can pick up context without replaying raw history.
+        try:
+            _maybe_write_session_summary(ss)
+        except Exception:
+            pass
+
     ss.current_user_input = ""
+
+
+def _maybe_write_session_summary(ss) -> None:
+    """
+    Every 5 completed turns, ask Claude to write a 2-sentence session summary
+    and store it as episodic memory. Injected as context on next session start.
+    """
+    turn_count = getattr(ss, "turn_count", 0) + 1
+    ss.turn_count = turn_count
+
+    if turn_count % 5 != 0:
+        return
+
+    # Build a compact representation of recent history for the summary call
+    recent = ss.history[-10:]   # last 10 history entries
+    if not recent:
+        return
+
+    summary_prompt = (
+        "In exactly 2 sentences, summarise what was discussed and accomplished "
+        "in this conversation so far. Be specific — name any tasks completed, "
+        "decisions made, or information the user shared. This summary will be "
+        "used to give context at the start of the next session."
+    )
+    try:
+        from llm import call_llm
+        resp = call_llm(
+            recent + [{"role": "user", "content": summary_prompt}],
+            system="You are a concise summariser. Return only the 2-sentence summary.",
+        )
+        summary = resp.text.strip()
+        if summary:
+            _get_episodic().save_turn("[session-summary]", summary)
+    except Exception:
+        pass
 
 
 def _get_episodic() -> "EpisodicMemory":
