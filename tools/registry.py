@@ -1716,18 +1716,26 @@ def execute_tool(name: str, args: dict) -> str:
     """
     Execute a tool by name with the given arguments.
     Always returns a string suitable to feed back to the LLM.
-    Every call is written to the audit log with an outcome tag.
+    Every call is written to the audit log with outcome + Sentinel risk tier.
     """
+    from tools.sentinel import classify as _sentinel_classify
+
     if name not in TOOL_DISPATCH:
         msg = f"Error: unknown tool '{name}'"
         audit_log(name, args, "error", msg)
         return msg
 
+    # Capture Sentinel risk for the audit entry (non-destructive tools → "")
+    try:
+        risk = _sentinel_classify(name, args).risk if name in DESTRUCTIVE_TOOLS else ""
+    except Exception:
+        risk = ""
+
     try:
         result = str(TOOL_DISPATCH[name](**args))
     except Exception as e:
         msg = f"Error executing {name}: {type(e).__name__}: {e}"
-        audit_log(name, args, "error", msg)
+        audit_log(name, args, "error", msg, risk=risk)
         return msg
 
     # Classify outcome by result content
@@ -1738,10 +1746,15 @@ def execute_tool(name: str, args: dict) -> str:
     else:
         outcome = "ok"
 
-    audit_log(name, args, outcome, result)
+    audit_log(name, args, outcome, result, risk=risk)
     return result
 
 
 def record_declined(name: str, args: dict):
     """Called by the agent loop when the user rejects a destructive tool at the approval prompt."""
-    audit_log(name, args, "denied", "user declined at approval prompt")
+    from tools.sentinel import classify as _sentinel_classify
+    try:
+        risk = _sentinel_classify(name, args).risk
+    except Exception:
+        risk = ""
+    audit_log(name, args, "denied", "user declined at approval prompt", risk=risk)
