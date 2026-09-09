@@ -76,6 +76,13 @@ def _docs(fn: str):
     return _call
 
 
+def _vault(fn: str):
+    def _call(**kwargs):
+        import tools.vault as _v
+        return getattr(_v, fn)(**kwargs)
+    return _call
+
+
 # Reminders singleton — lazy so the module (and its dateutil dep) loads on first use
 _reminders_instance = None
 
@@ -1161,6 +1168,94 @@ _list_allowed_paths_decl = {
     "input_schema": {"type": "object", "properties": {}},
 }
 
+# ── Vault tool declarations ───────────────────────────────────────────────
+
+_vault_unlock_decl = {
+    "name": "vault_unlock",
+    "description": (
+        "Unlock the encrypted credential vault for this session using the master "
+        "passphrase. Must be called once per session before vault_get_secret or "
+        "vault_store_secret. The passphrase is never logged or stored — it only "
+        "lives in memory while the agent is running. Use when the user asks the "
+        "agent to retrieve a stored credential or password."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "passphrase": {
+                "type": "string",
+                "description": "Master vault passphrase set during vault setup",
+            },
+        },
+        "required": ["passphrase"],
+    },
+}
+
+_vault_store_decl = {
+    "name": "vault_store_secret",
+    "description": (
+        "Store a credential in the encrypted vault under a given name. "
+        "Use for passwords, API keys, PINs, or any sensitive value the agent "
+        "needs to retrieve later for autonomous tasks (e.g. IRCTC password, "
+        "Zomato account PIN). Value is encrypted with AES-128 before being "
+        "written to disk — it is never stored in plaintext. "
+        "Requires vault_unlock to have been called this session."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name":  {"type": "string", "description": "Identifier for the secret (e.g. 'irctc_password', 'amazon_pin')"},
+            "value": {"type": "string", "description": "The secret value to encrypt and store"},
+        },
+        "required": ["name", "value"],
+    },
+}
+
+_vault_get_decl = {
+    "name": "vault_get_secret",
+    "description": (
+        "Retrieve a stored credential from the encrypted vault by name. "
+        "Use during autonomous tasks when a login or password is needed — "
+        "the value is decrypted in memory and returned to you, but is never "
+        "written to the conversation history or audit log. "
+        "Requires vault_unlock to have been called this session."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Name of the secret to retrieve"},
+        },
+        "required": ["name"],
+    },
+}
+
+_vault_list_decl = {
+    "name": "vault_list_secrets",
+    "description": (
+        "List the names of all secrets stored in the vault. "
+        "Values are never shown — only names. Use to check what credentials "
+        "are available before starting an autonomous task. "
+        "Requires vault_unlock to have been called this session."
+    ),
+    "input_schema": {"type": "object", "properties": {}},
+}
+
+_vault_delete_decl = {
+    "name": "vault_delete_secret",
+    "description": (
+        "Permanently delete a named secret from the vault. "
+        "Use when the user wants to remove a stored credential. "
+        "This is irreversible — the encrypted entry is erased from disk."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Name of the secret to delete"},
+        },
+        "required": ["name"],
+    },
+}
+
 
 # Flat list of tool declarations. Passed directly to Claude's messages.create;
 # other providers translate as needed inside llm.py.
@@ -1182,6 +1277,11 @@ ALL_TOOLS = [
     _delete_reminder_decl,
     _morning_briefing_decl,
     _list_allowed_paths_decl,
+    _vault_unlock_decl,
+    _vault_store_decl,
+    _vault_get_decl,
+    _vault_list_decl,
+    _vault_delete_decl,
     _web_fetch_decl,
     _web_search_decl,
     _open_url_decl,
@@ -1240,6 +1340,7 @@ DESTRUCTIVE_TOOLS = {
     "docs_create", "docs_append",
     "open_url",
     "browser_open", "search_irctc_train",
+    "vault_store_secret", "vault_delete_secret",
 }
 
 # Tools that require typing an explicit uppercase confirmation word (not just 'y').
@@ -1462,6 +1563,23 @@ def preview_action(name: str, args: dict) -> str:
             f"    {prev['body_snippet'].replace(chr(10), chr(10) + '    ')}"
         )
 
+    if name == "vault_store_secret":
+        secret_name = args.get("name", "?")
+        return (
+            f"  action:  encrypt and store secret in local vault\n"
+            f"  name:    {secret_name}\n"
+            f"  value:   [hidden — never logged]\n"
+            f"  storage: data/vault.enc (AES-128 encrypted)"
+        )
+
+    if name == "vault_delete_secret":
+        secret_name = args.get("name", "?")
+        return (
+            f"  action:  ⚠ permanently DELETE secret from vault\n"
+            f"  name:    {secret_name}\n"
+            f"  note:    this cannot be undone"
+        )
+
     return f"  (no preview available for '{name}')"
 
 
@@ -1540,6 +1658,11 @@ TOOL_DISPATCH = {
     "delete_reminder":   _wrap(lambda reminder_id: _delete_reminder_impl(reminder_id)),
     "morning_briefing":  _wrap(lambda: __import__('memory.briefing', fromlist=['compose']).compose(SemanticMemory())),
     "list_allowed_paths": _wrap(lambda: _list_allowed_paths_impl()),
+    "vault_unlock":        _wrap(lambda passphrase: _vault("unlock_vault")(passphrase=passphrase)),
+    "vault_store_secret":  _wrap(lambda name, value: _vault("store_secret")(name=name, value=value)),
+    "vault_get_secret":    _wrap(lambda name: _vault("get_secret")(name=name)),
+    "vault_list_secrets":  _wrap(lambda: _vault("list_secrets")()),
+    "vault_delete_secret": _wrap(lambda name: _vault("delete_secret")(name=name)),
     "web_fetch":         _wrap(lambda url: _web("fetch")(url=url)),
     "web_search":        _wrap(lambda query, max_results=5: _web("search")(query=query, max_results=max_results)),
     "open_url":          _wrap(lambda url: _web("open_url")(url=url)),
