@@ -19,6 +19,7 @@ from memory.search import search_unified, format_unified_results
 from memory.semantic import SemanticMemory
 from tools.audit import log as audit_log
 from config import get_read_paths, get_write_paths
+from tools.browser import open_page as browser_open_page, search_irctc_train
 
 
 # ── Lazy module loaders ───────────────────────────────────────────────────
@@ -58,6 +59,20 @@ def _gmail(fn: str):
     def _call(**kwargs):
         import tools.gmail as _g
         return getattr(_g, fn)(**kwargs)
+    return _call
+
+
+def _sheets(fn: str):
+    def _call(**kwargs):
+        import tools.sheets as _s
+        return getattr(_s, fn)(**kwargs)
+    return _call
+
+
+def _docs(fn: str):
+    def _call(**kwargs):
+        import tools.docs as _d
+        return getattr(_d, fn)(**kwargs)
     return _call
 
 
@@ -1541,11 +1556,11 @@ TOOL_DISPATCH = {
     "calendar_list_upcoming": _wrap(lambda days=7: _cal("list_upcoming")(days=days)),
     "calendar_create_event":  _wrap(lambda summary, start, end="", description="", location="", attendees="":
                                     _cal("create_event")(summary=summary, start=start, end=end, description=description, location=location, attendees=attendees)),
-    "sheets_find":   _wrap(lambda query, n=5: sheets_find(query, n)),
-    "sheets_read":   _wrap(lambda spreadsheet_id, range="": sheets_read(spreadsheet_id, range)),
-    "sheets_append": _wrap(lambda spreadsheet_id, range, values: sheets_append(spreadsheet_id, range, values)),
-    "sheets_update": _wrap(lambda spreadsheet_id, range, values: sheets_update(spreadsheet_id, range, values)),
-    "sheets_create": _wrap(lambda title: sheets_create(title)),
+    "sheets_find":   _wrap(lambda query, n=5: _sheets("find")(query=query, n=n)),
+    "sheets_read":   _wrap(lambda spreadsheet_id, range="": _sheets("read")(spreadsheet_id=spreadsheet_id, range_a1=range)),
+    "sheets_append": _wrap(lambda spreadsheet_id, range, values: _sheets("append")(spreadsheet_id=spreadsheet_id, range_a1=range, values=values)),
+    "sheets_update": _wrap(lambda spreadsheet_id, range, values: _sheets("update")(spreadsheet_id=spreadsheet_id, range_a1=range, values=values)),
+    "sheets_create": _wrap(lambda title: _sheets("create")(title=title)),
     # Desktop / computer-use (all lazy — pyautogui only imported on first call)
     "desktop_screenshot":  _wrap(lambda region=None: _dt("screenshot")(region=tuple(region) if region else None)),
     "mouse_move":          _wrap(lambda x, y: _dt("mouse_move")(x=int(x), y=int(y))),
@@ -1567,10 +1582,10 @@ TOOL_DISPATCH = {
     "screenshot_window":   _wrap(lambda title: _dt("screenshot_window")(title=title)),
     "launch_app":          _wrap(lambda command: _dt("launch_app")(command=command)),
     "find_text_on_screen": _wrap(lambda text, screenshot_path=None: _dt("find_text_on_screen")(text=text, screenshot_path=screenshot_path)),
-    "docs_find":     _wrap(lambda query, n=5: docs_find(query, n)),
-    "docs_read":     _wrap(lambda doc_id: docs_read(doc_id)),
-    "docs_create":   _wrap(lambda title, content="": docs_create(title, content)),
-    "docs_append":   _wrap(lambda doc_id, text: docs_append(doc_id, text)),
+    "docs_find":     _wrap(lambda query, n=5: _docs("find")(query=query, n=n)),
+    "docs_read":     _wrap(lambda doc_id: _docs("read")(doc_id=doc_id)),
+    "docs_create":   _wrap(lambda title, content="": _docs("create")(title=title, content=content)),
+    "docs_append":   _wrap(lambda doc_id, text: _docs("append")(doc_id=doc_id, text=text)),
 }
 
 
