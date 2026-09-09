@@ -1432,6 +1432,61 @@ _clear_tasks_decl = {
     "input_schema": {"type": "object", "properties": {}},
 }
 
+# ── Shopping tool declarations ─────────────────────────────────────────────
+
+_search_amazon_decl = {
+    "name": "search_amazon",
+    "description": (
+        "Search Amazon India for products. Returns top results with titles, URLs, "
+        "and price snippets. Use when the user wants to buy something from Amazon. "
+        "After the user picks a product, open its URL with browser_open to add "
+        "to cart autonomously (agent stops at payment). "
+        "Example: 'find me a good USB-C hub under 2000 rupees'"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query":       {"type": "string",  "description": "Product search query"},
+            "max_results": {"type": "integer", "description": "How many results (1-10, default 5)"},
+        },
+        "required": ["query"],
+    },
+}
+
+_search_flipkart_decl = {
+    "name": "search_flipkart",
+    "description": (
+        "Search Flipkart for products. Returns top results with titles, URLs, "
+        "and price snippets. Use when the user wants to buy from Flipkart. "
+        "After the user picks a product, open its URL with browser_open to "
+        "add to cart autonomously (agent stops at payment)."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query":       {"type": "string",  "description": "Product search query"},
+            "max_results": {"type": "integer", "description": "How many results (1-10, default 5)"},
+        },
+        "required": ["query"],
+    },
+}
+
+_compare_prices_decl = {
+    "name": "compare_prices",
+    "description": (
+        "Search both Amazon India and Flipkart for a product and return results "
+        "side-by-side for price comparison. Use when the user says 'compare prices "
+        "for X' or 'where should I buy Y — Amazon or Flipkart?'"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Product name to compare"},
+        },
+        "required": ["query"],
+    },
+}
+
 
 # Flat list of tool declarations. Passed directly to Claude's messages.create;
 # other providers translate as needed inside llm.py.
@@ -1470,6 +1525,9 @@ ALL_TOOLS = [
     _delete_pref_decl,
     _list_tasks_decl,
     _clear_tasks_decl,
+    _search_amazon_decl,
+    _search_flipkart_decl,
+    _compare_prices_decl,
     _web_fetch_decl,
     _web_search_decl,
     _open_url_decl,
@@ -1901,6 +1959,12 @@ TOOL_DISPATCH = {
                                __import__('memory.preferences', fromlist=['delete_preference']).delete_preference(category, key)),
     "list_background_tasks": _wrap(lambda: _fmt_task_list()),
     "clear_completed_tasks": _wrap(lambda: _clear_tasks()),
+    "search_amazon":   _wrap(lambda query, max_results=5:
+                             __import__('tools.shopping', fromlist=['search_amazon']).search_amazon(query, int(max_results))),
+    "search_flipkart": _wrap(lambda query, max_results=5:
+                             __import__('tools.shopping', fromlist=['search_flipkart']).search_flipkart(query, int(max_results))),
+    "compare_prices":  _wrap(lambda query:
+                             __import__('tools.shopping', fromlist=['compare_prices']).compare_prices(query)),
     "web_fetch":         _wrap(lambda url: _web("fetch")(url=url)),
     "web_search":        _wrap(lambda query, max_results=5: _web("search")(query=query, max_results=max_results)),
     "open_url":          _wrap(lambda url: _web("open_url")(url=url)),
