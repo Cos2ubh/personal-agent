@@ -15,7 +15,9 @@ To wire up automatic background firing, see docs/notifier_setup.md.
 Exits with code 0 on success (even if nothing was due), non-zero on hard errors.
 """
 
+import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Ensure project root is on sys.path so we can import memory.reminders
@@ -23,7 +25,14 @@ _PROJ_ROOT = Path(__file__).parent
 if str(_PROJ_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJ_ROOT))
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from memory.reminders import Reminders, format_due  # noqa: E402
+
+_API_URL      = os.getenv("AGENT_API_URL", "http://localhost:8502").rstrip("/")
+_OWNER_NUMBER = os.getenv("OWNER_NUMBER", "")
+_BRIEFING_HOUR = int(os.getenv("BRIEFING_HOUR", "8"))   # send briefing at this hour
 
 
 def _toast(title: str, body: str) -> bool:
@@ -51,12 +60,58 @@ def _toast(title: str, body: str) -> bool:
         return False
 
 
+def _push_briefing_to_whatsapp() -> bool:
+    """
+    If the API server is running and OWNER_NUMBER is set, queue a morning
+    briefing in the outbox so the WhatsApp bridge picks it up.
+    Only fires once — at the configured BRIEFING_HOUR (default 8am).
+    """
+    if not _OWNER_NUMBER:
+        return False
+    now_hour = datetime.now(timezone.utc).astimezone().hour
+    if now_hour != _BRIEFING_HOUR:
+        return False
+
+    try:
+        import httpx
+        resp = httpx.post(
+            f"{_API_URL}/briefing/wa:{_OWNER_NUMBER}@c.us",
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            print("[notifier] morning briefing queued for WhatsApp")
+            return True
+    except Exception as e:
+        print(f"[notifier] WhatsApp push failed (server may not be running): {e}", file=sys.stderr)
+    return False
+
+
+def _push_reminder_to_whatsapp(title: str, body: str) -> bool:
+    """Queue a reminder notification to the WhatsApp outbox."""
+    if not _OWNER_NUMBER:
+        return False
+    try:
+        import httpx
+        sid = f"wa:{_OWNER_NUMBER}@c.us"
+        httpx.post(
+            f"{_API_URL}/push",
+            json={"session_id": sid, "message": f"⏰ {title}\n{body}"},
+            timeout=5,
+        )
+        return True
+    except Exception:
+        return False
+
+
 def main() -> int:
     try:
         rem = Reminders()
     except Exception as e:
         print(f"[notifier] could not open reminders DB: {e}", file=sys.stderr)
         return 2
+
+    # Morning briefing push (fires at configured hour)
+    _push_briefing_to_whatsapp()
 
     due = rem.due_now()
     if not due:
@@ -65,8 +120,9 @@ def main() -> int:
     fired = 0
     for r in due:
         title = f"Reminder #{r['id']}"
-        body = f"{r['text']}\n(due {format_due(r['due_at'])})"
+        body  = f"{r['text']}\n(due {format_due(r['due_at'])})"
         _toast(title, body)
+        _push_reminder_to_whatsapp(title, body)
         rem.mark_notified(r["id"])
         fired += 1
 
