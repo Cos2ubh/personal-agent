@@ -1256,6 +1256,111 @@ _vault_delete_decl = {
     },
 }
 
+# ── Goal tracker tool declarations ────────────────────────────────────────
+
+_set_goal_decl = {
+    "name": "set_goal",
+    "description": (
+        "Create a long-term goal with weekly milestones. Use when the user "
+        "says 'I want to get fit over 3 months', 'help me launch my product "
+        "in 60 days', or any multi-week ambition. The agent breaks it into "
+        "weekly checkpoints that surface in the morning briefing. "
+        "milestones is an optional list of specific weekly targets — if "
+        "omitted, placeholder milestones are created for each week."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title":        {"type": "string", "description": "Short name for the goal"},
+            "horizon_days": {"type": "integer", "description": "Total duration in days (e.g. 90 for 3 months)"},
+            "description":  {"type": "string", "description": "Optional longer description of what success looks like"},
+            "milestones":   {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional list of weekly milestone texts (one per week)",
+            },
+        },
+        "required": ["title", "horizon_days"],
+    },
+}
+
+_list_goals_decl = {
+    "name": "list_goals",
+    "description": (
+        "List all active long-term goals with their milestone progress. "
+        "Use when the user asks 'what are my goals', 'how am I doing', "
+        "or wants a progress overview. Pass include_completed=true to also "
+        "see finished goals."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "include_completed": {"type": "boolean", "description": "Include completed goals (default false)"},
+        },
+    },
+}
+
+_get_goal_decl = {
+    "name": "get_goal",
+    "description": "Get full details of one goal by ID — all milestones, progress notes, and target date.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "goal_id": {"type": "integer", "description": "Goal ID from list_goals"},
+        },
+        "required": ["goal_id"],
+    },
+}
+
+_update_milestone_decl = {
+    "name": "update_goal_milestone",
+    "description": (
+        "Mark a weekly milestone as done (or update its text). Use when "
+        "the user says 'I completed week 3 of my fitness goal' or "
+        "'update the milestone for week 2'. The agent surfaces incomplete "
+        "current-week milestones in the daily briefing."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "goal_id":  {"type": "integer", "description": "Goal ID"},
+            "week":     {"type": "integer", "description": "Week number (1-based)"},
+            "done":     {"type": "boolean", "description": "Mark as done (default true) or re-open (false)"},
+            "new_text": {"type": "string",  "description": "Optional updated milestone text"},
+        },
+        "required": ["goal_id", "week"],
+    },
+}
+
+_add_progress_note_decl = {
+    "name": "add_goal_progress_note",
+    "description": (
+        "Add a timestamped progress note to a goal. Use when the user gives "
+        "an update like 'I ran 5km today' or 'finished the landing page'. "
+        "Notes accumulate into a log visible in get_goal."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "goal_id": {"type": "integer", "description": "Goal ID"},
+            "note":    {"type": "string",  "description": "Progress update text"},
+        },
+        "required": ["goal_id", "note"],
+    },
+}
+
+_complete_goal_decl = {
+    "name": "complete_goal",
+    "description": "Mark a long-term goal as completed. Use when the user says they've achieved it.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "goal_id": {"type": "integer", "description": "Goal ID from list_goals"},
+        },
+        "required": ["goal_id"],
+    },
+}
+
 
 # Flat list of tool declarations. Passed directly to Claude's messages.create;
 # other providers translate as needed inside llm.py.
@@ -1282,6 +1387,12 @@ ALL_TOOLS = [
     _vault_get_decl,
     _vault_list_decl,
     _vault_delete_decl,
+    _set_goal_decl,
+    _list_goals_decl,
+    _get_goal_decl,
+    _update_milestone_decl,
+    _add_progress_note_decl,
+    _complete_goal_decl,
     _web_fetch_decl,
     _web_search_decl,
     _open_url_decl,
@@ -1663,6 +1774,18 @@ TOOL_DISPATCH = {
     "vault_get_secret":    _wrap(lambda name: _vault("get_secret")(name=name)),
     "vault_list_secrets":  _wrap(lambda: _vault("list_secrets")()),
     "vault_delete_secret": _wrap(lambda name: _vault("delete_secret")(name=name)),
+    "set_goal":             _wrap(lambda title, horizon_days, description="", milestones=None:
+                                  __import__('memory.goals', fromlist=['create_goal']).create_goal(title, horizon_days, description, milestones)),
+    "list_goals":           _wrap(lambda include_completed=False:
+                                  __import__('memory.goals', fromlist=['list_goals']).list_goals(include_completed)),
+    "get_goal":             _wrap(lambda goal_id:
+                                  __import__('memory.goals', fromlist=['get_goal']).get_goal(int(goal_id))),
+    "update_goal_milestone": _wrap(lambda goal_id, week, done=True, new_text="":
+                                   __import__('memory.goals', fromlist=['update_milestone']).update_milestone(int(goal_id), int(week), done, new_text)),
+    "add_goal_progress_note": _wrap(lambda goal_id, note:
+                                    __import__('memory.goals', fromlist=['add_progress_note']).add_progress_note(int(goal_id), note)),
+    "complete_goal":        _wrap(lambda goal_id:
+                                  __import__('memory.goals', fromlist=['complete_goal']).complete_goal(int(goal_id))),
     "web_fetch":         _wrap(lambda url: _web("fetch")(url=url)),
     "web_search":        _wrap(lambda query, max_results=5: _web("search")(query=query, max_results=max_results)),
     "open_url":          _wrap(lambda url: _web("open_url")(url=url)),

@@ -150,6 +150,18 @@ def _weather_lines(semantic: SemanticMemory) -> list[str]:
     return [f"🌤  Weather in {city}: {' '.join(snippet_lines)[:200]}"]
 
 
+def _goal_lines() -> list[str]:
+    """Best-effort current-week goal milestones. Silent if no goals exist."""
+    try:
+        from memory.goals import current_week_milestone
+        block = current_week_milestone()
+        if not block:
+            return []
+        return ["🎯 " + block.replace("\n  •", "\n  •")]
+    except Exception:
+        return []
+
+
 def compose(semantic: SemanticMemory) -> str:
     """
     Compose the morning briefing as a single formatted string.
@@ -170,5 +182,9 @@ def compose(semantic: SemanticMemory) -> str:
     weather = _weather_lines(semantic)
     if weather:
         parts.extend(weather)
+
+    goals = _goal_lines()
+    if goals:
+        parts.extend(goals)
 
     return "\n".join(parts)
