@@ -1361,6 +1361,59 @@ _complete_goal_decl = {
     },
 }
 
+# ── Preference tool declarations ──────────────────────────────────────────
+
+_set_pref_decl = {
+    "name": "set_preference",
+    "description": (
+        "Store a user preference so the agent applies it automatically going forward. "
+        "Use when the user says things like 'I prefer window seats', 'always book 3A class', "
+        "'I'm vegetarian', 'keep replies short', 'add 15 min buffer to meetings'. "
+        "Organise by category (travel, food, email, calendar, response, etc.) and key."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "category": {"type": "string", "description": "Domain of the preference (e.g. travel, food, email, calendar, response)"},
+            "key":      {"type": "string", "description": "Specific preference name (e.g. seat, dietary, tone, length)"},
+            "value":    {"type": "string", "description": "The user's preferred value (e.g. window, vegetarian, concise)"},
+        },
+        "required": ["category", "key", "value"],
+    },
+}
+
+_get_pref_decl = {
+    "name": "get_preference",
+    "description": "Retrieve a stored preference by category and key.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "category": {"type": "string"},
+            "key":      {"type": "string"},
+        },
+        "required": ["category", "key"],
+    },
+}
+
+_list_prefs_decl = {
+    "name": "list_preferences",
+    "description": "List all stored user preferences, grouped by category.",
+    "input_schema": {"type": "object", "properties": {}},
+}
+
+_delete_pref_decl = {
+    "name": "delete_preference",
+    "description": "Remove a stored preference. Use when the user says a preference no longer applies.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "category": {"type": "string"},
+            "key":      {"type": "string"},
+        },
+        "required": ["category", "key"],
+    },
+}
+
 
 # Flat list of tool declarations. Passed directly to Claude's messages.create;
 # other providers translate as needed inside llm.py.
@@ -1393,6 +1446,10 @@ ALL_TOOLS = [
     _update_milestone_decl,
     _add_progress_note_decl,
     _complete_goal_decl,
+    _set_pref_decl,
+    _get_pref_decl,
+    _list_prefs_decl,
+    _delete_pref_decl,
     _web_fetch_decl,
     _web_search_decl,
     _open_url_decl,
@@ -1786,6 +1843,14 @@ TOOL_DISPATCH = {
                                     __import__('memory.goals', fromlist=['add_progress_note']).add_progress_note(int(goal_id), note)),
     "complete_goal":        _wrap(lambda goal_id:
                                   __import__('memory.goals', fromlist=['complete_goal']).complete_goal(int(goal_id))),
+    "set_preference":    _wrap(lambda category, key, value:
+                               __import__('memory.preferences', fromlist=['set_preference']).set_preference(category, key, value)),
+    "get_preference":    _wrap(lambda category, key:
+                               __import__('memory.preferences', fromlist=['get_preference']).get_preference(category, key)),
+    "list_preferences":  _wrap(lambda:
+                               __import__('memory.preferences', fromlist=['list_preferences']).list_preferences()),
+    "delete_preference": _wrap(lambda category, key:
+                               __import__('memory.preferences', fromlist=['delete_preference']).delete_preference(category, key)),
     "web_fetch":         _wrap(lambda url: _web("fetch")(url=url)),
     "web_search":        _wrap(lambda query, max_results=5: _web("search")(query=query, max_results=max_results)),
     "open_url":          _wrap(lambda url: _web("open_url")(url=url)),

@@ -577,6 +577,14 @@ def _build_system_prompt(user_msg: str) -> str:
     if facts_block:
         parts.append(facts_block)
 
+    try:
+        from memory.preferences import as_prompt_block as prefs_block
+        pb = prefs_block()
+        if pb:
+            parts.append(pb)
+    except Exception:
+        pass
+
     # Skip episodic recall for short/conversational messages — embedding "hello"
     # costs a ChromaDB round-trip and never returns useful context.
     if user_msg and len(user_msg.strip()) > 25:
