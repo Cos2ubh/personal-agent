@@ -224,6 +224,19 @@ def render_sidebar():
         with st.expander("🔍 Recent activity"):
             st.text(format_tail(15))
 
+        try:
+            from core.task_queue import format_status as task_status, get_results
+            completed = get_results()
+            with st.expander(f"⚙️  Background tasks ({len(completed)} done)"):
+                st.caption(task_status())
+                for t in completed[:5]:
+                    icon = "✅" if t.status.value == "done" else "❌"
+                    st.markdown(f"{icon} **{t.label}**")
+                    if t.result:
+                        st.caption(t.result[:200])
+        except Exception:
+            pass
+
         st.caption(f"File watcher: {watcher_status()}")
 
         st.divider()

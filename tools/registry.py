@@ -1414,6 +1414,24 @@ _delete_pref_decl = {
     },
 }
 
+# ── Async task queue tool declarations ────────────────────────────────────
+
+_list_tasks_decl = {
+    "name": "list_background_tasks",
+    "description": (
+        "List all background tasks — queued, running, done, or failed. "
+        "Use when the user asks 'what tasks are running', 'is my research done', "
+        "or wants to see the status of something kicked off earlier."
+    ),
+    "input_schema": {"type": "object", "properties": {}},
+}
+
+_clear_tasks_decl = {
+    "name": "clear_completed_tasks",
+    "description": "Remove all completed and failed background tasks from the list.",
+    "input_schema": {"type": "object", "properties": {}},
+}
+
 
 # Flat list of tool declarations. Passed directly to Claude's messages.create;
 # other providers translate as needed inside llm.py.
@@ -1450,6 +1468,8 @@ ALL_TOOLS = [
     _get_pref_decl,
     _list_prefs_decl,
     _delete_pref_decl,
+    _list_tasks_decl,
+    _clear_tasks_decl,
     _web_fetch_decl,
     _web_search_decl,
     _open_url_decl,
@@ -1808,6 +1828,34 @@ def _list_allowed_paths_impl():
     return "\n".join(lines)
 
 
+def _fmt_task_list() -> str:
+    try:
+        from core.task_queue import list_tasks
+        tasks = list_tasks()
+        if not tasks:
+            return "No background tasks in queue."
+        lines = []
+        for t in tasks:
+            ts = t.created_at[:16].replace("T", " ")
+            lines.append(f"  [{t.status.upper():<8}] #{t.id}  {t.label}  ({ts})")
+            if t.result and t.status.value == "done":
+                lines.append(f"    → {t.result[:120]}")
+            if t.error:
+                lines.append(f"    ✗ {t.error[:120]}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error reading task queue: {e}"
+
+
+def _clear_tasks() -> str:
+    try:
+        from core.task_queue import clear_done
+        n = clear_done()
+        return f"Cleared {n} completed/failed task(s)."
+    except Exception as e:
+        return f"Error clearing tasks: {e}"
+
+
 TOOL_DISPATCH = {
     "read_file":         _wrap(lambda path: read_file(path)),
     "list_dir":          _wrap(lambda path: "\n".join(list_dir(path))),
@@ -1851,6 +1899,8 @@ TOOL_DISPATCH = {
                                __import__('memory.preferences', fromlist=['list_preferences']).list_preferences()),
     "delete_preference": _wrap(lambda category, key:
                                __import__('memory.preferences', fromlist=['delete_preference']).delete_preference(category, key)),
+    "list_background_tasks": _wrap(lambda: _fmt_task_list()),
+    "clear_completed_tasks": _wrap(lambda: _clear_tasks()),
     "web_fetch":         _wrap(lambda url: _web("fetch")(url=url)),
     "web_search":        _wrap(lambda query, max_results=5: _web("search")(query=query, max_results=max_results)),
     "open_url":          _wrap(lambda url: _web("open_url")(url=url)),
