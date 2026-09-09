@@ -36,6 +36,7 @@ from tools.registry import (
     HARD_APPROVAL_WORD, preview_action, record_declined,
 )
 from tools.audit import format_tail
+from tools.sentinel import classify as sentinel_classify, format_verdict as sentinel_format
 
 MAX_TOOL_ITERATIONS = 15   # matches agent.py — research chains need headroom, runaway loops still caught
 
@@ -319,11 +320,13 @@ def render_approval_card():
     tc_args = pending["tc_args"]
     hard = pending["hard"]
 
+    verdict = sentinel_classify(tc_name, tc_args)
     icon = "⚠️" if hard else "🛑"
     title = "Hard approval — irreversible" if hard else "Approval needed"
 
     with st.chat_message("assistant"):
         st.markdown(f"### {icon} {title}")
+        st.markdown(sentinel_format(verdict))
         st.code(preview_action(tc_name, tc_args), language=None)
 
         if hard:
