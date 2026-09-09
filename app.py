@@ -19,6 +19,7 @@ import subprocess
 from pathlib import Path
 
 import streamlit as st
+from components.voice import render_voice_button, get_voice_transcript
 
 from memory.watcher import start_watcher, watcher_status
 from config import (
@@ -669,8 +670,13 @@ render_chat_history()
 
 # Approval card (if any) — renders below chat, above input
 if render_approval_card():
-    # When a card is showing, the chat_input is still active but the loop is paused
     st.info("Resolve the approval above to continue.", icon="⏸️")
+
+# Voice input — mic button above the text input
+render_voice_button()
+
+# Pick up any voice transcript that arrived via query param
+_voice_text = get_voice_transcript()
 
 user_input = st.chat_input(
     "Ask me anything — paste/attach an image or type a question...",
@@ -773,6 +779,17 @@ def _handle_slash(cmd: str) -> bool:
     # Unknown slash command — let the LLM handle it
     return False
 
+
+# Voice transcript overrides the text box if it arrived this rerun
+if _voice_text and not st.session_state.pending_approval:
+    st.session_state.history.append({"role": "user", "content": _voice_text})
+    st.session_state.display_messages.append({"role": "user", "content": f"🎤 {_voice_text}"})
+    st.session_state.current_user_input = _voice_text
+    with st.chat_message("user"):
+        st.markdown(f"🎤 {_voice_text}")
+    st.session_state.iterations = 0
+    _run_loop()
+    st.rerun()
 
 if user_input and not st.session_state.pending_approval:
     import base64
