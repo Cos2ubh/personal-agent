@@ -20,6 +20,7 @@ from pathlib import Path
 
 import streamlit as st
 from components.voice import render_voice_button, get_voice_transcript
+from components.onboarding import run_onboarding, is_first_run
 
 from memory.watcher import start_watcher, watcher_status
 from config import (
@@ -270,6 +271,17 @@ def render_sidebar():
             st.session_state.history = []
             st.session_state.pending_approval = None
             st.rerun()
+
+        st.divider()
+        with st.expander("💎 Plans & pricing"):
+            st.markdown(
+                "**Free** — 50 messages/day, read-only tools\n\n"
+                "**Power ₹999/mo** — Unlimited messages, autonomous booking, "
+                "WhatsApp access\n\n"
+                "**Maximum ₹4999/mo** — Everything + Opus model priority, "
+                "goal tracking, custom integrations\n\n"
+                "_Early access: all features unlocked_"
+            )
 
 
 # ── Chat history renderer ─────────────────────────────────────────────────
@@ -677,6 +689,11 @@ if not st.session_state.due_reminders_shown:
                 st.markdown(f"- **#{r['id']}** ({format_due(r['due_at'])}) — {r['text']}")
                 rem.mark_notified(r["id"])
     st.session_state.due_reminders_shown = True
+
+# Show onboarding on first run (no memory.db yet) or if not yet completed
+if is_first_run() or not st.session_state.get("onboarding_done"):
+    if not run_onboarding():
+        st.stop()   # don't render chat until onboarding is done
 
 render_sidebar()
 render_chat_history()

@@ -1,0 +1,16 @@
+[theme]
+base = "dark"
+primaryColor         = "#7C5CBF"   # violet accent — professional, distinct from stock Streamlit blue
+backgroundColor      = "#0F1117"   # near-black background
+secondaryBackgroundColor = "#1A1D27"  # sidebar + card background
+textColor            = "#E8E8E8"   # slightly off-white — easier on the eyes
+font                 = "sans serif"
+
+[server]
+headless            = true
+enableCORS          = false
+enableXsrfProtection = true
+maxUploadSize       = 50           # MB — allow large doc uploads
+
+[browser]
+gatherUsageStats = false
