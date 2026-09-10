@@ -53,12 +53,23 @@ if (fs.existsSync(envPath)) {
 }
 
 const API_URL      = (process.env.AGENT_API_URL || 'http://localhost:8502').replace(/\/$/, '');
-const OWNER_NUMBER = process.env.OWNER_NUMBER || '';   // e.g. "919876543210"
+const OWNER_NUMBER = process.env.OWNER_NUMBER || '';
 const POLL_INTERVAL_MS = 60_000;   // 60 seconds
+
+// Allowlist: comma-separated numbers in international format (no + or spaces)
+// e.g. ALLOWED_NUMBERS=919709392128,919876543210,919123456789
+const ALLOWED_NUMBERS = new Set(
+  (process.env.ALLOWED_NUMBERS || OWNER_NUMBER)
+    .split(',')
+    .map(n => n.trim())
+    .filter(Boolean)
+);
 
 if (!OWNER_NUMBER) {
   console.warn('[bridge] WARNING: OWNER_NUMBER not set. Proactive push will not work.');
 }
+console.log(`[bridge] Allowlist: ${[...ALLOWED_NUMBERS].join(', ') || 'open (anyone)'}`);
+
 
 // ── Build session ID from a WhatsApp chat ID ──────────────────────────────
 
@@ -99,8 +110,15 @@ client.on('auth_failure', msg => {
 // ── Incoming message handler ───────────────────────────────────────────────
 
 client.on('message', async msg => {
-  // Ignore group chats and status updates for now
+  // Ignore group chats and status updates
   if (msg.isGroupMsg || msg.from === 'status@broadcast') return;
+
+  // Only respond to numbers on the allowlist
+  const senderNumber = msg.from.replace('@c.us', '');
+  if (ALLOWED_NUMBERS.size > 0 && !ALLOWED_NUMBERS.has(senderNumber)) {
+    console.log(`[bridge] Ignored message from unlisted number: ${msg.from}`);
+    return;
+  }
 
   const from    = msg.from;   // e.g. "919876543210@c.us"
   const text    = msg.body.trim();

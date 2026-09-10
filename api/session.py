@@ -37,7 +37,7 @@ def get_or_create(session_id: str) -> Session:
         from memory.semantic import SemanticMemory
         _sessions[session_id] = Session(
             session_id=session_id,
-            semantic=SemanticMemory(),
+            semantic=SemanticMemory(namespace=session_id),
         )
     return _sessions[session_id]
 
